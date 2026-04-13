@@ -1,9 +1,10 @@
 from flask import Flask, request, jsonify
-import asyncio
 from scraper_engine import scrape_all
 from scoring_engine import compute_conformity
 from db import init_db, save
 from excel_processor import enrich_excel
+import sqlite3
+import os
 
 app = Flask(__name__)
 init_db()
@@ -14,7 +15,7 @@ def scrape():
     name = data["name"]
     city = data["city"]
 
-    results = asyncio.run(scrape_all(name, city))
+    results = scrape_all(name, city)
     result = compute_conformity(results)
 
     result["name"] = name
@@ -29,13 +30,12 @@ def enrich():
     input_file = request.json["input"]
     output_file = request.json["output"]
 
-    asyncio.run(enrich_excel(input_file, output_file))
+    enrich_excel(input_file, output_file)
 
     return jsonify({"status": "done"})
 
 @app.route("/stats")
 def stats():
-    import sqlite3
     conn = sqlite3.connect("data.db")
     c = conn.cursor()
 
@@ -46,8 +46,6 @@ def stats():
         "total": total,
         "avg_confidence": round(avg or 0, 1)
     })
-
-import os
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 10000))

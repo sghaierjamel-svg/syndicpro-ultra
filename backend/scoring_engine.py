@@ -21,13 +21,13 @@ def compute_conformity(results):
 
         return best, occ, round(conf, 1)
 
-    phone, p_occ, p_conf = best(phone_count)
-    email, e_occ, e_conf = best(email_count)
+    phone, _, p_conf = best(phone_count)
+    email, _, e_conf = best(email_count)
 
     return {
         "phone": phone,
         "email": email,
         "phone_conf": p_conf,
         "email_conf": e_conf,
-        "global_conf": round((p_conf + e_conf)/2, 1)
+        "global_conf": round((p_conf + e_conf) / 2, 1)
     }
