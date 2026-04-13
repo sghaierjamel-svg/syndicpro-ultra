@@ -1,4 +1,4 @@
-const API_URL = "https://syndicpro-backend.onrender.com";
+const API_URL = "https://syndicpro-backend-e8h4.onrender.com";
 
 async function run(){
     const name = document.getElementById("name").value;
@@ -13,14 +13,10 @@ async function run(){
     const data = await res.json();
 
     document.getElementById("result").innerHTML = `
-        <h3>Résultat</h3>
-
         📞 ${data.phone} (${data.phone_conf}%)
-        <br><br>
-
+        <br>
         📧 ${data.email} (${data.email_conf}%)
-        <br><br>
-
-        📊 Confiance globale: <b>${data.global_conf}%</b>
+        <br>
+        📊 Score global: ${data.global_conf}%
     `;
 }

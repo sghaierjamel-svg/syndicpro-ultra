@@ -24,7 +24,12 @@ def scrape_all(name, city):
 
     for source, url in queries:
         html = fetch(url)
-        data = extract_data(html)
+
+        if html:
+            data = extract_data(html)
+        else:
+            data = {"phones": [], "emails": []}
+
         data["source"] = source
         results.append(data)
 
