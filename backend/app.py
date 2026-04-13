@@ -11,19 +11,30 @@ init_db()
 
 @app.route("/scrape", methods=["POST"])
 def scrape():
-    data = request.json
-    name = data["name"]
-    city = data["city"]
+    try:
+        data = request.get_json()
 
-    results = scrape_all(name, city)
-    result = compute_conformity(results)
+        if not data:
+            return jsonify({"error": "No JSON received"}), 400
 
-    result["name"] = name
-    result["city"] = city
+        name = data.get("name", "")
+        city = data.get("city", "")
 
-    save(result)
+        if not name or not city:
+            return jsonify({"error": "Missing name or city"}), 400
 
-    return jsonify(result)
+        results = scrape_all(name, city)
+        result = compute_conformity(results)
+
+        result["name"] = name
+        result["city"] = city
+
+        save(result)
+
+        return jsonify(result)
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 @app.route("/enrich", methods=["POST"])
 def enrich():
