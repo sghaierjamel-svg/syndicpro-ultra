@@ -118,30 +118,31 @@ def _extract_result_urls(html):
 #  SOURCES
 # ══════════════════════════════════════════════════════════════════════════════
 
-def src_ddg(name, city, short):
+def src_ddg(name, city, short, context=""):
     """DDG Lite — nom complet et nom court."""
+    ctx = f" {context}" if context else ""
     results = {"phones": [], "emails": [], "websites": []}
     for q_str in [
-        f"{short} {city} syndic téléphone contact",
+        f"{short} {city}{ctx} téléphone contact",
         f'"{short}" {city} contact',
-        f"{name} {city} syndic téléphone",
+        f"{name} {city} téléphone",
     ]:
         html = fetch(f"https://lite.duckduckgo.com/lite/?q={quote(q_str)}")
         d = extract_data(html)
         results["phones"].extend(d["phones"])
         results["emails"].extend(d["emails"])
         results["websites"].extend(d["websites"])
-    # Dédoublonner
     results["phones"] = list(dict.fromkeys(results["phones"]))
     results["emails"] = list(dict.fromkeys(results["emails"]))
     return results, "ddg"
 
 
-def src_bing(name, city, short):
+def src_bing(name, city, short, context=""):
     """Bing — très bon pour Facebook et les annuaires."""
+    ctx = f" {context}" if context else ""
     results = {"phones": [], "emails": [], "websites": []}
     for q_str in [
-        f"{short} {city} syndic téléphone",
+        f"{short} {city}{ctx} téléphone",
         f"site:facebook.com {short} {city}",
         f'"{short}" {city} contact email',
     ]:
@@ -156,16 +157,16 @@ def src_bing(name, city, short):
     return results, "bing"
 
 
-def src_facebook_mobile(name, city, short):
+def src_facebook_mobile(name, city, short, context=""):
     """
     mbasic.facebook.com — seule version de Facebook scrappable sans browser.
-    Très efficace pour les syndics tunisiens qui n'ont que FB comme présence.
     """
+    ctx = f" {context}" if context else ""
     results = {"phones": [], "emails": [], "websites": []}
     for q_str in [
         f"{short} {city}",
-        f"{short} syndic {city}",
-        f"résidence {short} {city}",
+        f"{short}{ctx} {city}",
+        f"{name} {city}",
     ]:
         url = f"https://mbasic.facebook.com/search/top/?q={quote(q_str)}"
         html = fetch(url, referer="https://mbasic.facebook.com/", timeout=10)
@@ -175,9 +176,8 @@ def src_facebook_mobile(name, city, short):
         if d["phones"] or d["emails"]:
             break
 
-    # Si on a trouvé une page, visiter les liens de résultat
     if not results["phones"]:
-        q = quote(f"{short} syndic {city}")
+        q = quote(f"{short}{ctx} {city}")
         html = fetch(f"https://mbasic.facebook.com/search/pages/?q={q}",
                      referer="https://mbasic.facebook.com/")
         if html:
@@ -198,11 +198,12 @@ def src_facebook_mobile(name, city, short):
     return results, "facebook"
 
 
-def src_google(name, city, short):
+def src_google(name, city, short, context=""):
     """Google Search."""
+    ctx = f" {context}" if context else ""
     results = {"phones": [], "emails": [], "websites": []}
     for q_str in [
-        f"{short} syndic {city} téléphone",
+        f"{short}{ctx} {city} téléphone",
         f'"{short}" {city} contact',
     ]:
         try:
@@ -221,11 +222,11 @@ def src_google(name, city, short):
     return results, "google"
 
 
-def src_arabic(name, city, short):
+def src_arabic(name, city, short, context=""):
     """Recherche en arabe — essentiel pour Tunisie."""
     results = {"phones": [], "emails": [], "websites": []}
     for q_str in [
-        f"{short} {city} نقابة ملاك هاتف",
+        f"{short} {city} هاتف",
         f"{name} {city} تونس هاتف",
     ]:
         html = fetch(f"https://lite.duckduckgo.com/lite/?q={quote(q_str)}")
@@ -279,18 +280,25 @@ def src_rne(name, city, rne_id):
     return extract_data(html), "rne"
 
 
-RNE_BORNE_SEARCH = "https://www.registre-entreprises.tn/api/rne-api/front-office/shortEntites"
+RNE_BORNE_SEARCH  = "https://www.registre-entreprises.tn/api/rne-api/front-office/shortEntites"
 RNE_BORNE_ENTRIES = "https://www.registre-entreprises.tn/api/rne-borne-api/borne-entries"
+
+
+def _rne_member(nom, qualite_fr):
+    """Retourne un dict membre si le nom est renseigné."""
+    nom = (nom or "").strip()
+    return {"nom": nom, "qualite": qualite_fr} if nom else None
 
 
 def src_rne_borne(name, city, short):
     """
     RNE registre-entreprises.tn — API publique gratuite.
-    Retourne le président, SG, trésorier, adresse officielle + ID RNE.
-    Ces infos servent ensuite à enrichir les recherches de contact.
+    Retourne TOUS les membres (président, SG, trésorier, responsable),
+    l'adresse officielle, l'ID RNE.
+    Effectue ensuite une recherche de contact par nom du premier responsable.
     """
     result = {"phones": [], "emails": [], "websites": [],
-              "president": "", "address": "", "rne_id_found": ""}
+              "president": "", "address": "", "rne_id_found": "", "members": []}
 
     ref = "https://www.registre-entreprises.tn/"
 
@@ -310,17 +318,16 @@ def src_rne_borne(name, city, short):
         return result, "rne_borne"
 
     best = registres[0]
-    id_unique = best.get("identifiantUnique", "")
-    denom_latin = best.get("denominationLatin", short)
+    id_unique    = best.get("identifiantUnique", "")
+    denom_latin  = best.get("denominationLatin", short)
     result["rne_id_found"] = id_unique
 
-    # Chercher l'entrée borne pour obtenir le nom du président
+    # Récupérer l'entrée borne pour obtenir tous les membres
     try:
         r2 = requests.get(RNE_BORNE_ENTRIES, params={"denominationLatin": denom_latin},
                           headers=_headers(ref), timeout=10)
         if r2.status_code == 200:
             bornes = r2.json().get("bornes", [])
-            # Préférer l'entrée avec le bon identifiantUnique
             borne_id = None
             for b in bornes:
                 if b.get("identifiantUnique") == id_unique:
@@ -334,25 +341,52 @@ def src_rne_borne(name, city, short):
                                   headers=_headers(ref), timeout=10)
                 if r3.status_code == 200:
                     det = r3.json()
-                    president = (det.get("nomPresident") or
-                                 det.get("nomResponsable") or
-                                 det.get("nomSg") or
-                                 det.get("nomTresorier") or "")
-                    result["president"] = president.strip()
-                    result["address"] = (det.get("adresse") or "").strip()
+
+                    # Construire la liste complète des membres
+                    members = []
+                    for m in [
+                        _rne_member(det.get("nomPresident"),   "Président"),
+                        _rne_member(det.get("nomSg"),          "Secrétaire Général"),
+                        _rne_member(det.get("nomTresorier"),   "Trésorier"),
+                        _rne_member(
+                            det.get("nomResponsable"),
+                            det.get("qualiteResponsable") or "Responsable"
+                        ),
+                    ]:
+                        if m and m not in members:
+                            members.append(m)
+                    result["members"] = members
+
+                    # Champ président = premier responsable trouvé
+                    result["president"] = members[0]["nom"] if members else ""
+                    result["address"]   = (det.get("adresse") or "").strip()
     except Exception:
         pass
+
+    # ── Recherche de contact par nom du responsable principal ──────────────────
+    if result["president"]:
+        pres = result["president"]
+        for q in [
+            f"{pres} {city} téléphone",
+            f'"{pres}" {denom_latin}',
+        ]:
+            html = fetch(f"https://lite.duckduckgo.com/lite/?q={quote(q)}", timeout=7)
+            d = extract_data(html)
+            result["phones"].extend(d["phones"])
+            result["emails"].extend(d["emails"])
+        result["phones"] = list(dict.fromkeys(result["phones"]))
+        result["emails"] = list(dict.fromkeys(result["emails"]))
 
     return result, "rne_borne"
 
 
-def src_contact_crawler(name, city, short):
+def src_contact_crawler(name, city, short, context=""):
     """
     Trouve les URLs dans les résultats de recherche,
     puis visite leurs pages /contact pour extraire les coordonnées.
     """
-    # Chercher les URLs avec DDG
-    html = fetch(f"https://lite.duckduckgo.com/lite/?q={quote(short + ' ' + city + ' syndic')}")
+    ctx = f" {context}" if context else ""
+    html = fetch(f"https://lite.duckduckgo.com/lite/?q={quote(short + ' ' + city + ctx)}")
     urls = _extract_result_urls(html)
 
     if not urls:
@@ -388,24 +422,28 @@ def src_contact_crawler(name, city, short):
 #  ORCHESTRATEUR PARALLÈLE
 # ══════════════════════════════════════════════════════════════════════════════
 
-def scrape_all(name, city, rne_id=""):
+def scrape_all(name, city, rne_id="", context=""):
     """
     Lance toutes les sources EN PARALLÈLE.
     Normalise d'abord le nom pour de meilleures recherches.
+
+    context : mot-clé métier optionnel ajouté aux requêtes (ex: "restaurant",
+              "cabinet médical", "agence immobilière" …). Laisser vide pour
+              une recherche générique tous types de société.
     """
     sn = short_name(name)  # ex: "SYNDIC LES VIOLETTES" → "Les Violettes"
 
     tasks = {
-        "ddg":       lambda: src_ddg(name, city, sn),
-        "bing":      lambda: src_bing(name, city, sn),
-        "facebook":  lambda: src_facebook_mobile(name, city, sn),
-        "google":    lambda: src_google(name, city, sn),
-        "arabic":    lambda: src_arabic(name, city, sn),
+        "ddg":       lambda: src_ddg(name, city, sn, context),
+        "bing":      lambda: src_bing(name, city, sn, context),
+        "facebook":  lambda: src_facebook_mobile(name, city, sn, context),
+        "google":    lambda: src_google(name, city, sn, context),
+        "arabic":    lambda: src_arabic(name, city, sn, context),
         "pj_tn":     lambda: src_pj_tn(name, city, sn),
         "annuaires": lambda: src_annuaire(name, city, sn),
         "rne":       lambda: src_rne(name, city, rne_id),
         "rne_borne": lambda: src_rne_borne(name, city, sn),
-        "crawler":   lambda: src_contact_crawler(name, city, sn),
+        "crawler":   lambda: src_contact_crawler(name, city, sn, context),
     }
 
     results = []

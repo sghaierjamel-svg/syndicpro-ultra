@@ -18,9 +18,10 @@ def compute_conformity(results):
     phone_sources  = {}   # phone → set of sources
     email_sources  = {}   # email → set of sources
     sources_with_data = []
-    president = ""
-    address   = ""
+    president    = ""
+    address      = ""
     rne_id_found = ""
+    members      = []
 
     for r in results:
         src = r.get("source", "?")
@@ -40,7 +41,10 @@ def compute_conformity(results):
         # Extraire les données RNE Borne
         if r.get("president") and not president:
             president = r["president"]
-            sources_with_data.append(src) if src not in sources_with_data else None
+            if src not in sources_with_data:
+                sources_with_data.append(src)
+        if r.get("members") and not members:
+            members = r["members"]
         if r.get("address") and not address:
             address = r["address"]
         if r.get("rne_id_found") and not rne_id_found:
@@ -94,6 +98,7 @@ def compute_conformity(results):
         "sources_hit":  list(dict.fromkeys(sources_with_data)),
         "found":        bool(phone or email),
         "president":    president,
+        "members":      members,
         "address":      address,
         "rne_id_found": rne_id_found,
     }
@@ -105,5 +110,5 @@ def _empty():
         "phone_conf": 0, "email_conf": 0, "global_conf": 0,
         "all_phones": [], "all_emails": [],
         "sources_hit": [], "found": False,
-        "president": "", "address": "", "rne_id_found": "",
+        "president": "", "members": [], "address": "", "rne_id_found": "",
     }

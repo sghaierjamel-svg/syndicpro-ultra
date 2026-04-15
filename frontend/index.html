@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>SyndicPro Scanner — Recherche de contacts syndics</title>
-  <link rel="stylesheet" href="style.css?v=3">
+  <link rel="stylesheet" href="style.css?v=5">
   <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🔍</text></svg>">
 </head>
 <body>
@@ -39,18 +39,24 @@
   <!-- ─ ONGLET : Recherche simple ─ -->
   <section id="tab-search" class="tab-content active">
     <div class="card search-card">
-      <h2 class="card-title">Rechercher un syndic</h2>
-      <p class="card-desc">Entrez le nom de la résidence et la ville pour trouver automatiquement téléphone, email et site web.</p>
+      <h2 class="card-title">Rechercher une société</h2>
+      <p class="card-desc">Entrez le nom et la ville pour trouver automatiquement téléphone, email, site web et les membres du bureau.</p>
 
       <form id="searchForm" class="search-form">
         <div class="form-row">
           <div class="form-group">
-            <label for="inputName">Nom de la résidence</label>
-            <input type="text" id="inputName" placeholder="ex: Résidence Al Amal" required>
+            <label for="inputName">Nom de la société / résidence</label>
+            <input type="text" id="inputName" placeholder="ex: Résidence Al Amal, STE Tarek Transport..." required>
           </div>
           <div class="form-group">
             <label for="inputCity">Ville / Gouvernorat</label>
             <input type="text" id="inputCity" placeholder="ex: Tunis, Sfax, Sousse..." required>
+          </div>
+        </div>
+        <div class="form-row">
+          <div class="form-group" style="flex:1">
+            <label for="inputContext">Type d'activité <span style="color:#94a3b8;font-weight:400">(optionnel — aide à cibler)</span></label>
+            <input type="text" id="inputContext" placeholder="ex: syndic, restaurant, cabinet médical, agence immobilière...">
           </div>
         </div>
         <button type="submit" class="btn-primary" id="searchBtn">
@@ -173,6 +179,6 @@
   <a href="/dashboard" class="footer-link">Tableau de bord →</a>
 </footer>
 
-<script src="app.js?v=3"></script>
+<script src="app.js?v=5"></script>
 </body>
 </html>

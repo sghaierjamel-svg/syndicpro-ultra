@@ -77,7 +77,14 @@ async function loadResults(offset) {
       const badge   = r.found
         ? `<span class="badge-found">✔ Trouvé</span>`
         : `<span class="badge-not-found">✘ Non trouvé</span>`;
-      const president = r.president ? escHtml(r.president) : '<span style="color:#94a3b8">—</span>';
+      let president = '<span style="color:#94a3b8">—</span>';
+      if (r.members && r.members.length) {
+        president = r.members
+          .map(m => `<span title="${escHtml(m.qualite)}" style="display:block;font-size:.78rem">${escHtml(m.nom)} <span style="color:#94a3b8">(${escHtml(m.qualite)})</span></span>`)
+          .join('');
+      } else if (r.president) {
+        president = escHtml(r.president);
+      }
 
       return `<tr>
         <td style="color:#94a3b8;font-size:.8rem">${offset + i + 1}</td>

@@ -4,14 +4,25 @@ Gestion de la base de données SQLite.
 
 import sqlite3
 import os
+import json
 import logging
+
+
+def _members_json(members):
+    """Sérialise la liste des membres en JSON pour la DB."""
+    if not members:
+        return ""
+    try:
+        return json.dumps(members, ensure_ascii=False)
+    except Exception:
+        return ""
 
 DB_PATH = os.environ.get("DB_PATH", "data.db")
 
 REQUIRED_COLUMNS = {
     "id", "name", "city", "phone", "email", "website",
     "all_phones", "all_emails", "sources_hit", "confidence",
-    "found", "rne_id", "president", "address", "created_at"
+    "found", "rne_id", "president", "members", "address", "created_at"
 }
 
 
@@ -46,6 +57,7 @@ def init_db():
             found       INTEGER DEFAULT 0,
             rne_id      TEXT DEFAULT '',
             president   TEXT DEFAULT '',
+            members     TEXT DEFAULT '',
             address     TEXT DEFAULT '',
             created_at  DATETIME DEFAULT CURRENT_TIMESTAMP
         )
@@ -74,6 +86,7 @@ def init_db():
                 "found":       "INTEGER DEFAULT 0",
                 "rne_id":      "TEXT    DEFAULT ''",
                 "president":   "TEXT    DEFAULT ''",
+                "members":     "TEXT    DEFAULT ''",
                 "address":     "TEXT    DEFAULT ''",
             }.get(col)
             if col_def:
@@ -140,6 +153,7 @@ def save(data):
         data.get("global_conf", 0),
         1 if data.get("found") else 0,
         data.get("president", ""),
+        _members_json(data.get("members", [])),
         data.get("address", ""),
     )
 
@@ -147,7 +161,7 @@ def save(data):
         c.execute("""
             UPDATE results SET
                 phone=?, email=?, website=?, all_phones=?, all_emails=?,
-                sources_hit=?, confidence=?, found=?, president=?, address=?,
+                sources_hit=?, confidence=?, found=?, president=?, members=?, address=?,
                 created_at=CURRENT_TIMESTAMP
             WHERE id=?
         """, row + (existing["id"],))
@@ -155,8 +169,8 @@ def save(data):
         c.execute("""
             INSERT INTO results
                 (phone, email, website, all_phones, all_emails, sources_hit,
-                 confidence, found, president, address, name, city)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+                 confidence, found, president, members, address, name, city)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
         """, row + (data["name"], data["city"]))
 
     conn.commit()
@@ -177,7 +191,18 @@ def get_all(limit=500, offset=0, only_found=False):
             (limit, offset)
         ).fetchall()
     conn.close()
-    return [dict(r) for r in rows]
+    result = []
+    for r in rows:
+        row = dict(r)
+        if row.get("members"):
+            try:
+                row["members"] = json.loads(row["members"])
+            except Exception:
+                row["members"] = []
+        else:
+            row["members"] = []
+        result.append(row)
+    return result
 
 
 def get_stats():

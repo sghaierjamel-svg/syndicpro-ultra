@@ -28,8 +28,9 @@ const errorBox      = document.getElementById('errorBox');
 
 searchForm.addEventListener('submit', async (e) => {
   e.preventDefault();
-  const name = document.getElementById('inputName').value.trim();
-  const city = document.getElementById('inputCity').value.trim();
+  const name    = document.getElementById('inputName').value.trim();
+  const city    = document.getElementById('inputCity').value.trim();
+  const context = (document.getElementById('inputContext')?.value || '').trim();
   if (!name || !city) return;
 
   // État chargement
@@ -43,7 +44,7 @@ searchForm.addEventListener('submit', async (e) => {
     const res = await fetch(API + '/scrape', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name, city })
+      body: JSON.stringify({ name, city, context })
     });
 
     const data = await res.json();
@@ -113,8 +114,14 @@ function renderResult(data) {
     extras.push(`<strong>Tous les téléphones :</strong> ${data.all_phones.join(' · ')}`);
   if (data.all_emails && data.all_emails.length > 1)
     extras.push(`<strong>Tous les emails :</strong> ${data.all_emails.join(' · ')}`);
-  if (data.president)
-    extras.push(`<strong>Président / Gérant (RNE) :</strong> ${data.president}`);
+  if (data.members && data.members.length) {
+    const membersHtml = data.members
+      .map(m => `<span style="margin-right:.8rem">${m.qualite} : <strong>${m.nom}</strong></span>`)
+      .join('');
+    extras.push(`<strong>Membres (RNE) :</strong><br><span style="font-size:.85rem">${membersHtml}</span>`);
+  } else if (data.president) {
+    extras.push(`<strong>Responsable (RNE) :</strong> ${data.president}`);
+  }
   if (data.address)
     extras.push(`<strong>Adresse (RNE) :</strong> ${data.address}`);
   if (extras.length) {

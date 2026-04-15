@@ -37,15 +37,16 @@ def scrape():
         return jsonify({"error": "Clé API invalide"}), 401
 
     data = request.get_json(silent=True) or {}
-    name   = (data.get("name")   or "").strip()
-    city   = (data.get("city")   or "").strip()
-    rne_id = (data.get("rne_id") or "").strip()
+    name    = (data.get("name")    or "").strip()
+    city    = (data.get("city")    or "").strip()
+    rne_id  = (data.get("rne_id")  or "").strip()
+    context = (data.get("context") or "").strip()
 
     if not name or not city:
         return jsonify({"error": "Les champs 'name' et 'city' sont obligatoires"}), 400
 
     try:
-        raw_results = scrape_all(name, city, rne_id=rne_id)
+        raw_results = scrape_all(name, city, rne_id=rne_id, context=context)
         result = compute_conformity(raw_results)
         result["name"] = name
         result["city"] = city
