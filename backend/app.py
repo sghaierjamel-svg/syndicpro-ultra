@@ -52,8 +52,9 @@ def scrape():
         save(result)
         return jsonify(result)
     except Exception as e:
-        app.logger.error(f"Erreur scrape({name}, {city}): {e}")
-        return jsonify({"error": "Erreur interne du serveur"}), 500
+        import traceback
+        app.logger.error(f"Erreur scrape({name}, {city}): {e}\n{traceback.format_exc()}")
+        return jsonify({"error": f"Erreur: {str(e)}"}), 500
 
 
 # ── Statistiques ───────────────────────────────────────────────────────────────

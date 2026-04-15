@@ -4,8 +4,15 @@ Gestion de la base de données SQLite.
 
 import sqlite3
 import os
+import logging
 
 DB_PATH = os.environ.get("DB_PATH", "data.db")
+
+REQUIRED_COLUMNS = {
+    "id", "name", "city", "phone", "email", "website",
+    "all_phones", "all_emails", "sources_hit", "confidence",
+    "found", "rne_id", "created_at"
+}
 
 
 def get_conn():
@@ -14,9 +21,16 @@ def get_conn():
     return conn
 
 
+def _existing_columns(c):
+    rows = c.execute("PRAGMA table_info(results)").fetchall()
+    return {row[1] for row in rows}
+
+
 def init_db():
     conn = get_conn()
     c = conn.cursor()
+
+    # Créer la table complète si elle n'existe pas
     c.execute("""
         CREATE TABLE IF NOT EXISTS results (
             id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -30,23 +44,76 @@ def init_db():
             sources_hit TEXT DEFAULT '',
             confidence  REAL DEFAULT 0,
             found       INTEGER DEFAULT 0,
+            rne_id      TEXT DEFAULT '',
             created_at  DATETIME DEFAULT CURRENT_TIMESTAMP
         )
     """)
-    # Migrations : ajouter les colonnes manquantes sur les bases existantes
-    for sql in [
-        "ALTER TABLE results ADD COLUMN website     TEXT    DEFAULT ''",
-        "ALTER TABLE results ADD COLUMN all_phones  TEXT    DEFAULT ''",
-        "ALTER TABLE results ADD COLUMN all_emails  TEXT    DEFAULT ''",
-        "ALTER TABLE results ADD COLUMN sources_hit TEXT    DEFAULT ''",
-        "ALTER TABLE results ADD COLUMN found       INTEGER DEFAULT 0",
-        "ALTER TABLE results ADD COLUMN rne_id      TEXT    DEFAULT ''",
-    ]:
-        try:
-            c.execute(sql)
-        except Exception:
-            pass  # colonne déjà existante → on ignore
     conn.commit()
+
+    # Vérifier si le schéma est à jour
+    existing = _existing_columns(c)
+    missing = REQUIRED_COLUMNS - existing
+
+    if missing:
+        logging.warning(f"Colonnes manquantes détectées : {missing} — migration en cours")
+        # Option 1 : essayer d'ajouter les colonnes manquantes
+        added = 0
+        for col in missing:
+            if col in ("id", "name", "city", "created_at"):
+                continue  # ces colonnes ne peuvent pas être ajoutées via ALTER
+            col_def = {
+                "phone":       "TEXT    DEFAULT ''",
+                "email":       "TEXT    DEFAULT ''",
+                "website":     "TEXT    DEFAULT ''",
+                "all_phones":  "TEXT    DEFAULT ''",
+                "all_emails":  "TEXT    DEFAULT ''",
+                "sources_hit": "TEXT    DEFAULT ''",
+                "confidence":  "REAL    DEFAULT 0",
+                "found":       "INTEGER DEFAULT 0",
+                "rne_id":      "TEXT    DEFAULT ''",
+            }.get(col)
+            if col_def:
+                try:
+                    c.execute(f"ALTER TABLE results ADD COLUMN {col} {col_def}")
+                    added += 1
+                except Exception as e:
+                    logging.warning(f"ALTER TABLE {col} : {e}")
+        conn.commit()
+
+        # Option 2 : si colonnes critiques toujours manquantes → recréer la table
+        existing_after = _existing_columns(c)
+        still_missing = REQUIRED_COLUMNS - existing_after - {"id", "name", "city", "created_at"}
+        if still_missing:
+            logging.warning(f"Recréation de la table (colonnes irrécupérables : {still_missing})")
+            c.execute("ALTER TABLE results RENAME TO results_old")
+            c.execute("""
+                CREATE TABLE results (
+                    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                    name        TEXT NOT NULL,
+                    city        TEXT NOT NULL,
+                    phone       TEXT DEFAULT '',
+                    email       TEXT DEFAULT '',
+                    website     TEXT DEFAULT '',
+                    all_phones  TEXT DEFAULT '',
+                    all_emails  TEXT DEFAULT '',
+                    sources_hit TEXT DEFAULT '',
+                    confidence  REAL DEFAULT 0,
+                    found       INTEGER DEFAULT 0,
+                    rne_id      TEXT DEFAULT '',
+                    created_at  DATETIME DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+            # Copier les données récupérables
+            old_cols = _existing_columns(c) & {"id","name","city","phone","email",
+                                                "confidence","found","created_at"}
+            cols_str = ", ".join(old_cols)
+            try:
+                c.execute(f"INSERT INTO results ({cols_str}) SELECT {cols_str} FROM results_old")
+            except Exception:
+                pass
+            c.execute("DROP TABLE IF EXISTS results_old")
+            conn.commit()
+
     conn.close()
 
 
@@ -54,7 +121,6 @@ def save(data):
     conn = get_conn()
     c = conn.cursor()
 
-    # Dédoublonnage : mise à jour si déjà existant
     existing = c.execute(
         "SELECT id FROM results WHERE name=? AND city=?",
         (data["name"], data["city"])
@@ -111,9 +177,9 @@ def get_all(limit=500, offset=0, only_found=False):
 def get_stats():
     conn = get_conn()
     c = conn.cursor()
-    total     = c.execute("SELECT COUNT(*) FROM results").fetchone()[0]
-    found     = c.execute("SELECT COUNT(*) FROM results WHERE found=1").fetchone()[0]
-    avg_conf  = c.execute("SELECT AVG(confidence) FROM results WHERE found=1").fetchone()[0]
+    total    = c.execute("SELECT COUNT(*) FROM results").fetchone()[0]
+    found    = c.execute("SELECT COUNT(*) FROM results WHERE found=1").fetchone()[0]
+    avg_conf = c.execute("SELECT AVG(confidence) FROM results WHERE found=1").fetchone()[0]
     conn.close()
     return {
         "total":          total,
@@ -125,11 +191,7 @@ def get_stats():
 
 
 def seed_from_list(syndics):
-    """
-    Insère une liste de syndics {name, city, rne_id} sans scraping.
-    Ignore les doublons (name+city déjà présents).
-    Retourne le nombre de nouveaux enregistrements insérés.
-    """
+    """Insère une liste de syndics sans scraping. Ignore les doublons."""
     conn = get_conn()
     c = conn.cursor()
     inserted = 0
