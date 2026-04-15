@@ -7,9 +7,14 @@ document.querySelectorAll('.tab-btn').forEach(btn => {
   btn.addEventListener('click', () => {
     const target = btn.dataset.tab;
     document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
-    document.querySelectorAll('.tab-content').forEach(s => s.classList.remove('active'));
+    document.querySelectorAll('.tab-content').forEach(s => {
+      s.classList.remove('active');
+      s.classList.add('hidden');       // <-- fix : remettre hidden sur tous
+    });
     btn.classList.add('active');
-    document.getElementById('tab-' + target).classList.add('active');
+    const el = document.getElementById('tab-' + target);
+    el.classList.remove('hidden');     // <-- fix : retirer hidden sur l'onglet cible
+    el.classList.add('active');
   });
 });
 
