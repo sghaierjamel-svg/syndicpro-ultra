@@ -33,6 +33,18 @@ def init_db():
             created_at  DATETIME DEFAULT CURRENT_TIMESTAMP
         )
     """)
+    # Migrations : ajouter les colonnes manquantes sur les bases existantes
+    for sql in [
+        "ALTER TABLE results ADD COLUMN website     TEXT    DEFAULT ''",
+        "ALTER TABLE results ADD COLUMN all_phones  TEXT    DEFAULT ''",
+        "ALTER TABLE results ADD COLUMN all_emails  TEXT    DEFAULT ''",
+        "ALTER TABLE results ADD COLUMN sources_hit TEXT    DEFAULT ''",
+        "ALTER TABLE results ADD COLUMN found       INTEGER DEFAULT 0",
+    ]:
+        try:
+            c.execute(sql)
+        except Exception:
+            pass  # colonne déjà existante → on ignore
     conn.commit()
     conn.close()
 
