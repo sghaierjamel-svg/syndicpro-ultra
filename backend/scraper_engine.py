@@ -1,14 +1,14 @@
 """
-SyndicPro Scanner — Moteur de scraping ULTIME
-16 sources en parallèle : Google, Bing, DDG, Facebook, LinkedIn,
-Google Maps, pj.tn, annuaire.com.tn, RNE.tn, tayara.tn, mubawab.tn,
-tunisie.com, requêtes arabe, contact page crawler, et plus.
+SyndicPro Scanner — Moteur de scraping ULTIME v3
+Sources parallèles : DDG, Bing, Facebook Mobile, mbasic.facebook.com,
+Google, pj.tn, annuaire.com.tn, RNE.tn, tayara.tn, + contact crawler.
+Normalisation du nom RNE → nom court pour de meilleures recherches.
 """
 
+import re
 import requests
-import time
 import random
-from urllib.parse import quote, urlparse
+from urllib.parse import quote, urlparse, unquote
 from concurrent.futures import ThreadPoolExecutor, wait, ALL_COMPLETED
 from bs4 import BeautifulSoup
 from utils import extract_data
@@ -18,37 +18,60 @@ USER_AGENTS = [
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:125.0) Gecko/20100101 Firefox/125.0",
     "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36 Edg/124.0.0.0",
-    "Mozilla/5.0 (iPhone; CPU iPhone OS 17_4 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Mobile/15E148 Safari/604.1",
     "Mozilla/5.0 (Android 14; Mobile; rv:125.0) Gecko/125.0 Firefox/125.0",
 ]
 
 NOISE_DOMAINS = {
-    'google', 'bing', 'duckduckgo', 'yahoo', 'facebook',
-    'twitter', 'youtube', 'wikipedia', 'linkedin', 'instagram',
-    'tiktok', 'amazon', 'apple', 'microsoft',
+    'google', 'bing', 'duckduckgo', 'yahoo', 'youtube',
+    'wikipedia', 'twitter', 'instagram', 'tiktok',
+    'amazon', 'apple', 'microsoft', 'whatsapp',
 }
+
+# Préfixes juridiques à retirer du nom RNE pour obtenir le nom court
+RNE_PREFIXES = [
+    'SYNDIC RESIDENTIEL', 'SYNDICAT DES RESIDENTS DE LA',
+    'SYNDICAT DES RESIDENTS', 'SYNDICAT DES PROPRIETAIRES',
+    'SYNDICAT DE COPROPRIETE', 'SYNDICAT DE LA RESIDENCE',
+    'SYNDIC DE LA RESIDENCE', 'SYNDIC DE RESIDENCE',
+    'SOCIETE IMMOBILIERE', 'SOCIETE DE GESTION',
+    'ASSOCIATION DES RESIDENTS', 'SOCIETE BOCHRA SYNDIC',
+    'SOCIETE', 'SYNDIC', 'SYNDICAT', 'RESIDENCE', 'ASSOCIATION',
+]
+
+
+def short_name(name):
+    """
+    Extrait le nom court depuis le nom juridique RNE.
+    Ex: 'SYNDIC RESIDENTIEL LES VIOLETTES' → 'Les Violettes'
+    """
+    n = name.upper().strip()
+    for prefix in RNE_PREFIXES:
+        if n.startswith(prefix):
+            n = n[len(prefix):].strip()
+            break
+    # Retirer les mots parasites en début
+    for word in ['DE LA', 'DE L\'', 'DES', 'DE', 'LA', 'LE', 'LES', 'AL', 'EL']:
+        if n.startswith(word + ' '):
+            pass  # garder — fait partie du nom
+    return n.title() if n else name.title()
 
 
 def _headers(referer=None):
     h = {
         "User-Agent":              random.choice(USER_AGENTS),
-        "Accept":                  "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+        "Accept":                  "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
         "Accept-Language":         "fr-FR,fr;q=0.9,ar-TN;q=0.8,en-US;q=0.7",
         "Accept-Encoding":         "gzip, deflate, br",
         "Connection":              "keep-alive",
-        "Upgrade-Insecure-Requests": "1",
         "DNT":                     "1",
         "Cache-Control":           "max-age=0",
     }
     if referer:
         h["Referer"] = referer
-        h["Sec-Fetch-Site"] = "cross-site"
     return h
 
 
 def fetch(url, timeout=8, retries=1, referer=None):
-    """Récupère une URL avec retry limité — timeout court pour rester dans les 30s globales."""
     for attempt in range(retries + 1):
         try:
             r = requests.get(url, headers=_headers(referer),
@@ -56,7 +79,7 @@ def fetch(url, timeout=8, retries=1, referer=None):
             if r.status_code == 200:
                 return r.text
             if r.status_code in (429, 503):
-                time.sleep(1)
+                import time; import time as t; t.sleep(1)
             elif r.status_code in (403, 404, 410):
                 return ""
         except Exception:
@@ -64,194 +87,232 @@ def fetch(url, timeout=8, retries=1, referer=None):
     return ""
 
 
+def _extract_result_urls(html):
+    """Extrait les URLs des résultats DDG/Bing depuis la page HTML."""
+    if not html:
+        return []
+    soup = BeautifulSoup(html, "html.parser")
+    urls = []
+    for a in soup.find_all('a', href=True):
+        href = a['href']
+        # DDG Lite redirige via //duckduckgo.com/l/?uddg=...
+        if 'uddg=' in href:
+            try:
+                href = unquote(href.split('uddg=')[1].split('&')[0])
+            except Exception:
+                continue
+        if not href.startswith('http'):
+            continue
+        parsed = urlparse(href)
+        domain = parsed.netloc.lower().replace('www.', '')
+        base_domain = domain.split('.')[0]
+        if base_domain in NOISE_DOMAINS:
+            continue
+        base = f"{parsed.scheme}://{parsed.netloc}"
+        if base not in urls:
+            urls.append(base)
+    return urls[:6]
+
+
 # ══════════════════════════════════════════════════════════════════════════════
-#  SOURCES DE RECHERCHE
+#  SOURCES
 # ══════════════════════════════════════════════════════════════════════════════
 
-def src_ddg_general(name, city):
-    """DuckDuckGo Lite — recherche générale contact."""
-    q = quote(f"{name} syndic {city} contact téléphone email")
-    return extract_data(fetch(f"https://lite.duckduckgo.com/lite/?q={q}")), "ddg"
-
-
-def src_ddg_contact(name, city):
-    """DuckDuckGo — ciblé sur les numéros de téléphone."""
-    q = quote(f'"{name}" "{city}" téléphone OR tél OR "04" OR "05" OR "07" OR "02"')
-    return extract_data(fetch(f"https://lite.duckduckgo.com/lite/?q={q}")), "ddg_tel"
-
-
-def src_ddg_arabic(name, city):
-    """DuckDuckGo — requête en arabe (beaucoup de syndics tunisiens en arabe)."""
-    q = quote(f"{name} {city} نقابة ملاك هاتف عنوان")
-    return extract_data(fetch(f"https://lite.duckduckgo.com/lite/?q={q}")), "ddg_ar"
-
-
-def src_ddg_facebook(name, city):
-    """DuckDuckGo — recherche sur Facebook."""
-    q = quote(f"site:facebook.com {name} {city}")
-    return extract_data(fetch(f"https://lite.duckduckgo.com/lite/?q={q}")), "facebook"
-
-
-def src_ddg_linkedin(name, city):
-    """DuckDuckGo — recherche sur LinkedIn."""
-    q = quote(f"site:linkedin.com {name} syndic {city} Tunisie contact")
-    return extract_data(fetch(f"https://lite.duckduckgo.com/lite/?q={q}")), "linkedin"
-
-
-def src_ddg_gmaps(name, city):
-    """DuckDuckGo — extraire les numéros des résultats Google Maps indexés."""
-    q = quote(f"site:maps.google.com {name} {city} OR \"{name}\" maps tunisie téléphone")
-    return extract_data(fetch(f"https://lite.duckduckgo.com/lite/?q={q}")), "gmaps"
-
-
-def src_bing_general(name, city):
-    """Bing — recherche générale."""
-    q = quote(f"{name} {city} syndic immeuble contact téléphone")
-    return extract_data(fetch(
-        f"https://www.bing.com/search?q={q}&setlang=fr&cc=TN",
-        referer="https://www.bing.com/"
-    )), "bing"
-
-
-def src_bing_facebook(name, city):
-    """Bing — recherche Facebook (Bing indexe mieux FB que DDG)."""
-    q = quote(f"site:facebook.com \"{name}\" {city}")
-    return extract_data(fetch(
-        f"https://www.bing.com/search?q={q}",
-        referer="https://www.bing.com/"
-    )), "bing_fb"
-
-
-def src_bing_local(name, city):
-    """Bing Local — résultats d'entreprises locales."""
-    q = quote(f"{name} {city} syndic Tunisia phone email")
-    return extract_data(fetch(
-        f"https://www.bing.com/search?q={q}&first=1&FORM=PERE",
-        referer="https://www.bing.com/"
-    )), "bing_local"
-
-
-def src_google(name, city):
-    """Google Search — avec session dédiée et cookies propres."""
-    q = quote(f"{name} syndic {city} téléphone contact Tunisie")
-    url = f"https://www.google.com/search?q={q}&hl=fr&gl=tn&num=10"
-    try:
-        r = requests.get(url, headers=_headers("https://www.google.com/"), timeout=8)
-        if r.status_code == 200:
-            return extract_data(r.text), "google"
-    except Exception:
-        pass
-    return extract_data(""), "google"
-
-
-def src_google_arabic(name, city):
-    """Google Search — requête arabe."""
-    q = quote(f"{name} {city} نقابة ملاك تونس هاتف")
-    url = f"https://www.google.com/search?q={q}&hl=ar&gl=tn"
-    try:
-        r = requests.get(url, headers=_headers("https://www.google.com/"), timeout=10)
-        if r.status_code == 200:
-            return extract_data(r.text), "google_ar"
-    except Exception:
-        pass
-    return extract_data(""), "google_ar"
-
-
-def src_pj_tn(name, city):
-    """Pages Jaunes Tunisie — annuaire professionnel."""
-    qn, qc = quote(name), quote(city)
-    for url in [
-        f"https://www.pj.tn/search?what={qn}+syndic&where={qc}",
-        f"https://www.pj.tn/search?what={qn}&where={qc}",
+def src_ddg(name, city, short):
+    """DDG Lite — nom complet et nom court."""
+    results = {"phones": [], "emails": [], "websites": []}
+    for q_str in [
+        f"{short} {city} syndic téléphone contact",
+        f'"{short}" {city} contact',
+        f"{name} {city} syndic téléphone",
     ]:
-        html = fetch(url, referer="https://www.pj.tn/")
+        html = fetch(f"https://lite.duckduckgo.com/lite/?q={quote(q_str)}")
+        d = extract_data(html)
+        results["phones"].extend(d["phones"])
+        results["emails"].extend(d["emails"])
+        results["websites"].extend(d["websites"])
+    # Dédoublonner
+    results["phones"] = list(dict.fromkeys(results["phones"]))
+    results["emails"] = list(dict.fromkeys(results["emails"]))
+    return results, "ddg"
+
+
+def src_bing(name, city, short):
+    """Bing — très bon pour Facebook et les annuaires."""
+    results = {"phones": [], "emails": [], "websites": []}
+    for q_str in [
+        f"{short} {city} syndic téléphone",
+        f"site:facebook.com {short} {city}",
+        f'"{short}" {city} contact email',
+    ]:
+        html = fetch(f"https://www.bing.com/search?q={quote(q_str)}&cc=TN",
+                     referer="https://www.bing.com/")
+        d = extract_data(html)
+        results["phones"].extend(d["phones"])
+        results["emails"].extend(d["emails"])
+        results["websites"].extend(d["websites"])
+    results["phones"] = list(dict.fromkeys(results["phones"]))
+    results["emails"] = list(dict.fromkeys(results["emails"]))
+    return results, "bing"
+
+
+def src_facebook_mobile(name, city, short):
+    """
+    mbasic.facebook.com — seule version de Facebook scrappable sans browser.
+    Très efficace pour les syndics tunisiens qui n'ont que FB comme présence.
+    """
+    results = {"phones": [], "emails": [], "websites": []}
+    for q_str in [
+        f"{short} {city}",
+        f"{short} syndic {city}",
+        f"résidence {short} {city}",
+    ]:
+        url = f"https://mbasic.facebook.com/search/top/?q={quote(q_str)}"
+        html = fetch(url, referer="https://mbasic.facebook.com/", timeout=10)
+        d = extract_data(html)
+        results["phones"].extend(d["phones"])
+        results["emails"].extend(d["emails"])
+        if d["phones"] or d["emails"]:
+            break
+
+    # Si on a trouvé une page, visiter les liens de résultat
+    if not results["phones"]:
+        q = quote(f"{short} syndic {city}")
+        html = fetch(f"https://mbasic.facebook.com/search/pages/?q={q}",
+                     referer="https://mbasic.facebook.com/")
+        if html:
+            soup = BeautifulSoup(html, "html.parser")
+            for a in soup.find_all('a', href=True)[:5]:
+                href = a['href']
+                if '/pages/' in href or ('facebook.com/' in href and 'search' not in href):
+                    page_url = href if href.startswith('http') else f"https://mbasic.facebook.com{href}"
+                    page_html = fetch(page_url, referer="https://mbasic.facebook.com/", timeout=8)
+                    d = extract_data(page_html)
+                    results["phones"].extend(d["phones"])
+                    results["emails"].extend(d["emails"])
+                    if d["phones"] or d["emails"]:
+                        break
+
+    results["phones"] = list(dict.fromkeys(results["phones"]))
+    results["emails"] = list(dict.fromkeys(results["emails"]))
+    return results, "facebook"
+
+
+def src_google(name, city, short):
+    """Google Search."""
+    results = {"phones": [], "emails": [], "websites": []}
+    for q_str in [
+        f"{short} syndic {city} téléphone",
+        f'"{short}" {city} contact',
+    ]:
+        try:
+            r = requests.get(
+                f"https://www.google.com/search?q={quote(q_str)}&hl=fr&gl=tn",
+                headers=_headers("https://www.google.com/"), timeout=8
+            )
+            if r.status_code == 200:
+                d = extract_data(r.text)
+                results["phones"].extend(d["phones"])
+                results["emails"].extend(d["emails"])
+        except Exception:
+            pass
+    results["phones"] = list(dict.fromkeys(results["phones"]))
+    results["emails"] = list(dict.fromkeys(results["emails"]))
+    return results, "google"
+
+
+def src_arabic(name, city, short):
+    """Recherche en arabe — essentiel pour Tunisie."""
+    results = {"phones": [], "emails": [], "websites": []}
+    for q_str in [
+        f"{short} {city} نقابة ملاك هاتف",
+        f"{name} {city} تونس هاتف",
+    ]:
+        html = fetch(f"https://lite.duckduckgo.com/lite/?q={quote(q_str)}")
+        d = extract_data(html)
+        results["phones"].extend(d["phones"])
+        results["emails"].extend(d["emails"])
+    results["phones"] = list(dict.fromkeys(results["phones"]))
+    results["emails"] = list(dict.fromkeys(results["emails"]))
+    return results, "arabic"
+
+
+def src_pj_tn(name, city, short):
+    """Pages Jaunes Tunisie."""
+    for q in [short, name]:
+        html = fetch(
+            f"https://www.pj.tn/search?what={quote(q)}&where={quote(city)}",
+            referer="https://www.pj.tn/"
+        )
         d = extract_data(html)
         if d["phones"] or d["emails"]:
             return d, "pagesjaunes"
     return extract_data(""), "pagesjaunes"
 
 
-def src_annuaire_tn(name, city):
-    """annuaire.com.tn — annuaire tunisien."""
-    q = quote(f"{name} {city}")
-    html = fetch(f"http://www.annuaire.com.tn/search?q={q}&cat=syndic", timeout=8)
-    return extract_data(html), "annuaire_tn"
+def src_annuaire(name, city, short):
+    """Annuaires tunisiens divers."""
+    results = {"phones": [], "emails": [], "websites": []}
+    urls = [
+        f"http://www.annuaire.com.tn/search?q={quote(short)}+{quote(city)}",
+        f"https://www.tayara.tn/search/?q={quote(short)}+{quote(city)}",
+    ]
+    for url in urls:
+        d = extract_data(fetch(url, timeout=7))
+        results["phones"].extend(d["phones"])
+        results["emails"].extend(d["emails"])
+    results["phones"] = list(dict.fromkeys(results["phones"]))
+    results["emails"] = list(dict.fromkeys(results["emails"]))
+    return results, "annuaires"
 
 
-def src_tayara(name, city):
-    """tayara.tn — petites annonces tunisiennes."""
-    q = quote(f"{name} {city}")
-    html = fetch(f"https://www.tayara.tn/search/?q={q}", referer="https://www.tayara.tn/")
-    return extract_data(html), "tayara"
-
-
-def src_mubawab(name, city):
-    """mubawab.tn — immobilier tunisien."""
-    q = quote(f"{name} {city}")
-    html = fetch(f"https://www.mubawab.tn/fr/sc/immobilier-a-vendre:q:{q}",
-                 referer="https://www.mubawab.tn/", timeout=10)
-    return extract_data(html), "mubawab"
-
-
-def src_rne(name, city, rne_id=""):
-    """Registre National des Entreprises Tunisie."""
+def src_rne(name, city, rne_id):
+    """RNE.tn — accès direct si ID disponible."""
     if rne_id:
         html = fetch(f"https://www.registre.tn/fr/societe/{rne_id}", timeout=10)
         d = extract_data(html)
         if d["phones"] or d["emails"]:
-            return d, "rne_direct"
+            return d, "rne"
     q = quote(f"{name} {city}")
     html = fetch(f"https://www.registre.tn/fr/recherche?q={q}",
                  referer="https://www.registre.tn/")
     return extract_data(html), "rne"
 
 
-def src_contact_crawler(name, city):
+def src_contact_crawler(name, city, short):
     """
-    Trouve le site officiel de la résidence, puis visite sa page /contact.
-    Méthode la plus fiable quand elle aboutit.
+    Trouve les URLs dans les résultats de recherche,
+    puis visite leurs pages /contact pour extraire les coordonnées.
     """
-    q = quote(f'"{name}" "{city}" syndic')
-    html = fetch(f"https://lite.duckduckgo.com/lite/?q={q}")
-    if not html:
-        return extract_data(""), "crawler"
+    # Chercher les URLs avec DDG
+    html = fetch(f"https://lite.duckduckgo.com/lite/?q={quote(short + ' ' + city + ' syndic')}")
+    urls = _extract_result_urls(html)
 
-    soup = BeautifulSoup(html, "html.parser")
-    candidate_urls = []
-    for a in soup.find_all('a', href=True):
-        href = a['href']
-        if not href.startswith('http'):
-            continue
-        parsed = urlparse(href)
-        domain = parsed.netloc.lower().replace('www.', '')
-        # Garder uniquement les sites tunisiens ou pertinents
-        if any(n in domain for n in NOISE_DOMAINS):
-            continue
-        base = f"{parsed.scheme}://{parsed.netloc}"
-        if base not in candidate_urls:
-            candidate_urls.append(base)
+    if not urls:
+        html2 = fetch(f"https://lite.duckduckgo.com/lite/?q={quote(name + ' ' + city)}")
+        urls = _extract_result_urls(html2)
 
     merged = {"phones": [], "emails": [], "websites": []}
-    seen_phones, seen_emails = set(), set()
+    seen = set()
 
-    for base in candidate_urls[:4]:
+    for base_url in urls[:5]:
         for path in ['/contact', '/nous-contacter', '/contactez-nous',
-                     '/coordonnees', '/about', '/']:
-            page_html = fetch(base + path, timeout=8, referer=base)
-            if not page_html:
+                     '/coordonnees', '/a-propos', '/']:
+            page = fetch(base_url + path, timeout=7, referer=base_url)
+            if not page:
                 continue
-            d = extract_data(page_html)
+            d = extract_data(page)
             for p in d["phones"]:
-                if p not in seen_phones:
-                    seen_phones.add(p)
+                if p not in seen:
+                    seen.add(p)
                     merged["phones"].append(p)
             for e in d["emails"]:
-                if e not in seen_emails:
-                    seen_emails.add(e)
+                if e not in seen:
+                    seen.add(e)
                     merged["emails"].append(e)
             merged["websites"].extend(d["websites"])
             if d["phones"] or d["emails"]:
-                break  # page contact trouvée pour ce domaine
+                break
 
     return merged, "crawler"
 
@@ -262,42 +323,29 @@ def src_contact_crawler(name, city):
 
 def scrape_all(name, city, rne_id=""):
     """
-    Lance les 16 sources EN PARALLÈLE (max 8 workers).
-    Timeout global 35 secondes.
+    Lance toutes les sources EN PARALLÈLE.
+    Normalise d'abord le nom pour de meilleures recherches.
     """
+    sn = short_name(name)  # ex: "SYNDIC LES VIOLETTES" → "Les Violettes"
+
     tasks = {
-        "ddg":          lambda: src_ddg_general(name, city),
-        "ddg_tel":      lambda: src_ddg_contact(name, city),
-        "ddg_ar":       lambda: src_ddg_arabic(name, city),
-        "facebook":     lambda: src_ddg_facebook(name, city),
-        "linkedin":     lambda: src_ddg_linkedin(name, city),
-        "gmaps":        lambda: src_ddg_gmaps(name, city),
-        "bing":         lambda: src_bing_general(name, city),
-        "bing_fb":      lambda: src_bing_facebook(name, city),
-        "bing_local":   lambda: src_bing_local(name, city),
-        "google":       lambda: src_google(name, city),
-        "google_ar":    lambda: src_google_arabic(name, city),
-        "pagesjaunes":  lambda: src_pj_tn(name, city),
-        "annuaire_tn":  lambda: src_annuaire_tn(name, city),
-        "tayara":       lambda: src_tayara(name, city),
-        "mubawab":      lambda: src_mubawab(name, city),
-        "rne":          lambda: src_rne(name, city, rne_id),
-        "crawler":      lambda: src_contact_crawler(name, city),
+        "ddg":      lambda: src_ddg(name, city, sn),
+        "bing":     lambda: src_bing(name, city, sn),
+        "facebook": lambda: src_facebook_mobile(name, city, sn),
+        "google":   lambda: src_google(name, city, sn),
+        "arabic":   lambda: src_arabic(name, city, sn),
+        "pj_tn":    lambda: src_pj_tn(name, city, sn),
+        "annuaires":lambda: src_annuaire(name, city, sn),
+        "rne":      lambda: src_rne(name, city, rne_id),
+        "crawler":  lambda: src_contact_crawler(name, city, sn),
     }
 
     results = []
-    with ThreadPoolExecutor(max_workers=8) as executor:
-        future_to_key = {executor.submit(fn): key for key, fn in tasks.items()}
-
-        # Attendre max 25 secondes — les futures non terminés sont ignorés
-        done, not_done = wait(future_to_key.keys(), timeout=25,
-                              return_when=ALL_COMPLETED)
-
-        # Annuler les futures en attente (non démarrés)
+    with ThreadPoolExecutor(max_workers=9) as executor:
+        future_map = {executor.submit(fn): key for key, fn in tasks.items()}
+        done, not_done = wait(future_map.keys(), timeout=28, return_when=ALL_COMPLETED)
         for f in not_done:
             f.cancel()
-
-        # Récupérer les résultats des futures terminés
         for future in done:
             try:
                 data, source = future.result(timeout=1)
