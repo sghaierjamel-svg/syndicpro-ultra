@@ -40,6 +40,7 @@ def init_db():
         "ALTER TABLE results ADD COLUMN all_emails  TEXT    DEFAULT ''",
         "ALTER TABLE results ADD COLUMN sources_hit TEXT    DEFAULT ''",
         "ALTER TABLE results ADD COLUMN found       INTEGER DEFAULT 0",
+        "ALTER TABLE results ADD COLUMN rne_id      TEXT    DEFAULT ''",
     ]:
         try:
             c.execute(sql)
@@ -121,6 +122,31 @@ def get_stats():
         "avg_confidence": round(avg_conf or 0, 1),
         "success_rate":   round((found / total * 100) if total else 0, 1),
     }
+
+
+def seed_from_list(syndics):
+    """
+    Insère une liste de syndics {name, city, rne_id} sans scraping.
+    Ignore les doublons (name+city déjà présents).
+    Retourne le nombre de nouveaux enregistrements insérés.
+    """
+    conn = get_conn()
+    c = conn.cursor()
+    inserted = 0
+    for s in syndics:
+        existing = c.execute(
+            "SELECT id FROM results WHERE name=? AND city=?",
+            (s["name"], s["city"])
+        ).fetchone()
+        if not existing:
+            c.execute(
+                "INSERT INTO results (name, city, rne_id) VALUES (?,?,?)",
+                (s["name"], s["city"], s.get("rne_id", ""))
+            )
+            inserted += 1
+    conn.commit()
+    conn.close()
+    return inserted
 
 
 def delete_all():

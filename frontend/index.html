@@ -32,7 +32,8 @@
   <!-- Onglets -->
   <div class="tabs">
     <button class="tab-btn active" data-tab="search">🔎 Recherche simple</button>
-    <button class="tab-btn" data-tab="excel">📂 Import Excel</button>
+    <button class="tab-btn" data-tab="rne">📋 Import RNE</button>
+    <button class="tab-btn" data-tab="excel">📂 Enrichissement Excel</button>
   </div>
 
   <!-- ─ ONGLET : Recherche simple ─ -->
@@ -88,6 +89,33 @@
 
     <!-- Erreur -->
     <div id="errorBox" class="alert-error hidden"></div>
+  </section>
+
+  <!-- ─ ONGLET : Import RNE ─ -->
+  <section id="tab-rne" class="tab-content hidden">
+    <div class="card">
+      <h2 class="card-title">Importer la base RNE (1427 syndics)</h2>
+      <p class="card-desc">
+        Importez votre fichier Excel SyndicPro (<code>Syndics_Tunisie_SyndicPro_v2.xlsx</code>)
+        pour peupler la base de données avec les 1427 syndics. Les contacts seront cherchés
+        lors de chaque recherche individuelle.
+      </p>
+
+      <div class="upload-zone" id="rneUploadZone">
+        <div class="upload-icon">📋</div>
+        <p>Glissez-déposez votre fichier RNE ici<br>ou <label for="rneFileInput" class="file-link">parcourir</label></p>
+        <input type="file" id="rneFileInput" accept=".xlsx,.xls" class="hidden">
+        <p id="rneFileName" class="file-name hidden"></p>
+      </div>
+
+      <button class="btn-primary" id="rneImportBtn" disabled>
+        <span id="rneImportText">Importer les syndics</span>
+        <span id="rneImportSpinner" class="spinner hidden"></span>
+      </button>
+
+      <div id="rneResult" class="hidden" style="margin-top:1rem;padding:1rem;background:#dcfce7;border-radius:8px;color:#16a34a;font-weight:600"></div>
+      <div id="rneError" class="alert-error hidden"></div>
+    </div>
   </section>
 
   <!-- ─ ONGLET : Import Excel ─ -->

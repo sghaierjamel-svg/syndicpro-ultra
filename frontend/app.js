@@ -155,6 +155,58 @@ function showError(msg) {
   errorBox.classList.remove('hidden');
 }
 
+/* ── Import RNE ── */
+const rneUploadZone   = document.getElementById('rneUploadZone');
+const rneFileInput    = document.getElementById('rneFileInput');
+const rneFileNameEl   = document.getElementById('rneFileName');
+const rneImportBtn    = document.getElementById('rneImportBtn');
+const rneImportText   = document.getElementById('rneImportText');
+const rneImportSpin   = document.getElementById('rneImportSpinner');
+const rneResult       = document.getElementById('rneResult');
+const rneError        = document.getElementById('rneError');
+
+rneUploadZone.addEventListener('click', (e) => { if (e.target !== rneFileInput) rneFileInput.click(); });
+rneUploadZone.addEventListener('dragover', (e) => { e.preventDefault(); rneUploadZone.classList.add('drag-over'); });
+rneUploadZone.addEventListener('dragleave', () => rneUploadZone.classList.remove('drag-over'));
+rneUploadZone.addEventListener('drop', (e) => {
+  e.preventDefault(); rneUploadZone.classList.remove('drag-over');
+  if (e.dataTransfer.files[0]) handleRneFile(e.dataTransfer.files[0]);
+});
+rneFileInput.addEventListener('change', () => { if (rneFileInput.files[0]) handleRneFile(rneFileInput.files[0]); });
+
+function handleRneFile(file) {
+  rneFileNameEl.textContent = '📄 ' + file.name;
+  rneFileNameEl.classList.remove('hidden');
+  rneImportBtn.disabled = false;
+  rneImportBtn._file = file;
+}
+
+rneImportBtn.addEventListener('click', async () => {
+  const file = rneImportBtn._file;
+  if (!file) return;
+  rneImportText.textContent = 'Import en cours…';
+  rneImportSpin.classList.remove('hidden');
+  rneImportBtn.disabled = true;
+  rneResult.classList.add('hidden');
+  rneError.classList.add('hidden');
+  try {
+    const fd = new FormData();
+    fd.append('file', file);
+    const res = await fetch(API + '/import/seed', { method: 'POST', body: fd });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Erreur serveur');
+    rneResult.textContent = `✔ ${data.inserted} nouveaux syndics importés sur ${data.total} lignes. Allez sur le tableau de bord pour voir la liste.`;
+    rneResult.classList.remove('hidden');
+  } catch (err) {
+    rneError.textContent = '⚠ ' + err.message;
+    rneError.classList.remove('hidden');
+  } finally {
+    rneImportText.textContent = 'Importer les syndics';
+    rneImportSpin.classList.add('hidden');
+    rneImportBtn.disabled = false;
+  }
+});
+
 /* ── Import Excel ── */
 const fileInput  = document.getElementById('fileInput');
 const uploadZone = document.getElementById('uploadZone');

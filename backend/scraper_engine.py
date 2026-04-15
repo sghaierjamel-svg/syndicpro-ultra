@@ -107,7 +107,35 @@ def scrape_google_cache(name, city):
     return extract_data(html), "ddg_contact"
 
 
-def scrape_all(name, city):
+def scrape_rne(name, city, rne_id=""):
+    """Registre National des Entreprises Tunisie — fiche publique."""
+    results = {"phones": [], "emails": [], "websites": []}
+
+    # Si on a l'ID RNE, accès direct à la fiche
+    if rne_id:
+        url = f"https://www.registre.tn/fr/societe/{rne_id}"
+        html = fetch(url, timeout=10)
+        if html:
+            data = extract_data(html)
+            if data["phones"] or data["emails"]:
+                return data, "rne_direct"
+
+    # Sinon, recherche par nom sur RNE
+    query = quote(f"{name} {city}")
+    url = f"https://www.registre.tn/fr/recherche?q={query}&type=association"
+    html = fetch(url, referer="https://www.registre.tn/", timeout=10)
+    return extract_data(html), "rne_search"
+
+
+def scrape_arabic(name, city):
+    """Recherche en arabe sur DuckDuckGo — beaucoup de syndics tunisiens ont du contenu arabe."""
+    query = quote(f"{name} {city} نقابة ملاك تليفون")
+    url = f"https://lite.duckduckgo.com/lite/?q={query}"
+    html = fetch(url)
+    return extract_data(html), "ddg_ar"
+
+
+def scrape_all(name, city, rne_id=""):
     """Lance tous les scrapers et retourne la liste des résultats."""
     sources = [
         lambda: scrape_duckduckgo(name, city),
@@ -115,6 +143,8 @@ def scrape_all(name, city):
         lambda: scrape_pj_tn(name, city),
         lambda: scrape_annuaire_tn(name, city),
         lambda: scrape_google_cache(name, city),
+        lambda: scrape_rne(name, city, rne_id),
+        lambda: scrape_arabic(name, city),
     ]
 
     results = []

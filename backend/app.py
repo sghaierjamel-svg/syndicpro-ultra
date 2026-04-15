@@ -7,11 +7,12 @@ from flask import Flask, request, jsonify, send_file
 from flask_cors import CORS
 from scraper_engine import scrape_all
 from scoring_engine import compute_conformity
-from db import init_db, save, get_all, get_stats, delete_all
+from db import init_db, save, get_all, get_stats, delete_all, seed_from_list
 from excel_processor import enrich_excel
 import os
 import io
 import csv
+import openpyxl
 
 app = Flask(__name__, static_folder='../frontend', static_url_path='')
 CORS(app)
@@ -36,14 +37,15 @@ def scrape():
         return jsonify({"error": "Clé API invalide"}), 401
 
     data = request.get_json(silent=True) or {}
-    name = (data.get("name") or "").strip()
-    city = (data.get("city") or "").strip()
+    name   = (data.get("name")   or "").strip()
+    city   = (data.get("city")   or "").strip()
+    rne_id = (data.get("rne_id") or "").strip()
 
     if not name or not city:
         return jsonify({"error": "Les champs 'name' et 'city' sont obligatoires"}), 400
 
     try:
-        raw_results = scrape_all(name, city)
+        raw_results = scrape_all(name, city, rne_id=rne_id)
         result = compute_conformity(raw_results)
         result["name"] = name
         result["city"] = city
@@ -127,6 +129,61 @@ def enrich():
     except Exception as e:
         app.logger.error(f"Erreur enrich: {e}")
         return jsonify({"error": f"Erreur traitement Excel: {str(e)}"}), 500
+
+
+# ── Import seed depuis Excel RNE ──────────────────────────────────────────────
+
+@app.route("/import/seed", methods=["POST"])
+def import_seed():
+    """Importe une liste de syndics depuis Excel sans scraper (juste nom+ville+ID RNE)."""
+    if "file" not in request.files:
+        return jsonify({"error": "Fichier Excel manquant"}), 400
+    uploaded = request.files["file"]
+    try:
+        wb = openpyxl.load_workbook(uploaded)
+        ws = wb.active
+
+        # Détecter la ligne d'entête (chercher 'Nom Résidence' dans les 5 premières lignes)
+        header_row = None
+        for i, row in enumerate(ws.iter_rows(min_row=1, max_row=5, values_only=True), 1):
+            if any(str(v or '').startswith('Nom') for v in row):
+                header_row = i
+                headers = [str(v or '').strip() for v in row]
+                break
+
+        if not header_row:
+            return jsonify({"error": "Entêtes non trouvées (colonne 'Nom Résidence' introuvable)"}), 400
+
+        def col(name_fragment):
+            for i, h in enumerate(headers):
+                if name_fragment.lower() in h.lower():
+                    return i
+            return None
+
+        name_col  = col('Nom Résidence') or col('Nom')
+        city_col  = col('Ville')
+        gov_col   = col('Gouvernorat')
+        rne_col   = col('ID RNE') or col('RNE')
+
+        if name_col is None:
+            return jsonify({"error": "Colonne 'Nom Résidence' introuvable"}), 400
+
+        syndics = []
+        for row in ws.iter_rows(min_row=header_row + 1, values_only=True):
+            name = str(row[name_col] or '').strip()
+            city = str(row[city_col] or row[gov_col] or '').strip() if (city_col is not None) else ''
+            if not city and gov_col is not None:
+                city = str(row[gov_col] or '').strip()
+            rne_id = str(row[rne_col] or '').strip() if rne_col is not None else ''
+            if name and city:
+                syndics.append({"name": name, "city": city, "rne_id": rne_id})
+
+        inserted = seed_from_list(syndics)
+        return jsonify({"status": "ok", "inserted": inserted, "total": len(syndics)})
+
+    except Exception as e:
+        app.logger.error(f"Erreur import/seed: {e}")
+        return jsonify({"error": str(e)}), 500
 
 
 # ── Supprimer tous les résultats ───────────────────────────────────────────────
