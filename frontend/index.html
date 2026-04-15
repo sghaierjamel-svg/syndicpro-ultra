@@ -1,9 +1,150 @@
-<h2>Scraper</h2>
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>SyndicPro Scanner — Recherche de contacts syndics</title>
+  <link rel="stylesheet" href="style.css">
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🔍</text></svg>">
+</head>
+<body>
 
-<input id="name">
-<input id="city">
-<button onclick="run()">Search</button>
+<!-- ── HEADER ── -->
+<header class="header">
+  <div class="header-inner">
+    <div class="brand">
+      <span class="brand-icon">🔍</span>
+      <div>
+        <span class="brand-name">SyndicPro Scanner</span>
+        <span class="brand-sub">Recherche automatique de contacts</span>
+      </div>
+    </div>
+    <nav class="nav-links">
+      <a href="/" class="nav-link active">Recherche</a>
+      <a href="/dashboard" class="nav-link">Tableau de bord</a>
+    </nav>
+  </div>
+</header>
 
-<pre id="result"></pre>
+<!-- ── MAIN ── -->
+<main class="container">
+
+  <!-- Onglets -->
+  <div class="tabs">
+    <button class="tab-btn active" data-tab="search">🔎 Recherche simple</button>
+    <button class="tab-btn" data-tab="excel">📂 Import Excel</button>
+  </div>
+
+  <!-- ─ ONGLET : Recherche simple ─ -->
+  <section id="tab-search" class="tab-content active">
+    <div class="card search-card">
+      <h2 class="card-title">Rechercher un syndic</h2>
+      <p class="card-desc">Entrez le nom de la résidence et la ville pour trouver automatiquement téléphone, email et site web.</p>
+
+      <form id="searchForm" class="search-form">
+        <div class="form-row">
+          <div class="form-group">
+            <label for="inputName">Nom de la résidence</label>
+            <input type="text" id="inputName" placeholder="ex: Résidence Al Amal" required>
+          </div>
+          <div class="form-group">
+            <label for="inputCity">Ville / Gouvernorat</label>
+            <input type="text" id="inputCity" placeholder="ex: Tunis, Sfax, Sousse..." required>
+          </div>
+        </div>
+        <button type="submit" class="btn-primary" id="searchBtn">
+          <span id="searchBtnText">Lancer la recherche</span>
+          <span id="searchBtnSpinner" class="spinner hidden"></span>
+        </button>
+      </form>
+    </div>
+
+    <!-- Résultats -->
+    <div id="resultBox" class="hidden">
+      <div class="card result-card" id="resultCard">
+        <div class="result-header">
+          <div>
+            <h3 id="resName" class="result-name"></h3>
+            <span id="resCity" class="result-city"></span>
+          </div>
+          <div id="resBadge" class="found-badge"></div>
+        </div>
+
+        <div class="contacts-grid" id="contactsGrid"></div>
+
+        <div class="confidence-bar-wrap" id="confWrap">
+          <div class="conf-label">
+            Indice de confiance global : <strong id="confValue"></strong>
+          </div>
+          <div class="conf-bar-bg">
+            <div class="conf-bar-fill" id="confBar"></div>
+          </div>
+        </div>
+
+        <div id="sourcesRow" class="sources-row"></div>
+        <div id="allContactsRow" class="all-contacts-row hidden"></div>
+      </div>
+    </div>
+
+    <!-- Erreur -->
+    <div id="errorBox" class="alert-error hidden"></div>
+  </section>
+
+  <!-- ─ ONGLET : Import Excel ─ -->
+  <section id="tab-excel" class="tab-content hidden">
+    <div class="card">
+      <h2 class="card-title">Enrichissement en masse via Excel</h2>
+      <p class="card-desc">
+        Importez un fichier <code>.xlsx</code> contenant une colonne <strong>Nom Résidence (FR)</strong>
+        et une colonne <strong>Ville</strong>. Le fichier sera enrichi avec téléphone, email,
+        site web et indice de confiance pour chaque ligne.
+      </p>
+
+      <div class="upload-zone" id="uploadZone">
+        <div class="upload-icon">📄</div>
+        <p>Glissez-déposez votre fichier ici<br>ou <label for="fileInput" class="file-link">parcourir</label></p>
+        <input type="file" id="fileInput" accept=".xlsx,.xls" class="hidden">
+        <p id="fileName" class="file-name hidden"></p>
+      </div>
+
+      <button class="btn-primary" id="enrichBtn" disabled>
+        <span id="enrichBtnText">Enrichir le fichier</span>
+        <span id="enrichSpinner" class="spinner hidden"></span>
+      </button>
+
+      <div id="enrichProgress" class="enrich-info hidden">
+        <div class="spinner-large"></div>
+        <p>Enrichissement en cours… Cela peut prendre plusieurs minutes selon le nombre de lignes.</p>
+      </div>
+
+      <div id="enrichError" class="alert-error hidden"></div>
+    </div>
+
+    <div class="card tips-card">
+      <h3 class="card-title">Format requis</h3>
+      <table class="tips-table">
+        <thead>
+          <tr><th>Colonne A</th><th>Colonne B</th><th>Colonnes ajoutées automatiquement</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Nom Résidence (FR)</td>
+            <td>Ville</td>
+            <td>Téléphone · Email · Site Web · Confiance (%) · Sources · Tous les téléphones · Tous les emails</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+</main>
+
+<!-- ── FOOTER ── -->
+<footer class="footer">
+  <span>SyndicPro Scanner &copy; 2025 — Outil de prospection tunisien</span>
+  <a href="/dashboard" class="footer-link">Tableau de bord →</a>
+</footer>
 
 <script src="app.js"></script>
+</body>
+</html>
