@@ -9,7 +9,7 @@ import requests
 import time
 import random
 from urllib.parse import quote, urlparse
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor, wait, ALL_COMPLETED
 from bs4 import BeautifulSoup
 from utils import extract_data
 
@@ -47,8 +47,8 @@ def _headers(referer=None):
     return h
 
 
-def fetch(url, timeout=12, retries=2, referer=None):
-    """Récupère une URL avec retry et gestion des erreurs."""
+def fetch(url, timeout=8, retries=1, referer=None):
+    """Récupère une URL avec retry limité — timeout court pour rester dans les 30s globales."""
     for attempt in range(retries + 1):
         try:
             r = requests.get(url, headers=_headers(referer),
@@ -56,13 +56,11 @@ def fetch(url, timeout=12, retries=2, referer=None):
             if r.status_code == 200:
                 return r.text
             if r.status_code in (429, 503):
-                time.sleep(2 * (attempt + 1))
+                time.sleep(1)
             elif r.status_code in (403, 404, 410):
                 return ""
         except Exception:
             pass
-        if attempt < retries:
-            time.sleep(random.uniform(0.3, 0.8))
     return ""
 
 
@@ -138,14 +136,7 @@ def src_google(name, city):
     q = quote(f"{name} syndic {city} téléphone contact Tunisie")
     url = f"https://www.google.com/search?q={q}&hl=fr&gl=tn&num=10"
     try:
-        s = requests.Session()
-        s.headers.update({
-            "User-Agent": random.choice(USER_AGENTS),
-            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-            "Accept-Language": "fr-FR,fr;q=0.9,ar-TN;q=0.8",
-            "Referer": "https://www.google.com/",
-        })
-        r = s.get(url, timeout=12, allow_redirects=True)
+        r = requests.get(url, headers=_headers("https://www.google.com/"), timeout=8)
         if r.status_code == 200:
             return extract_data(r.text), "google"
     except Exception:
@@ -296,10 +287,20 @@ def scrape_all(name, city, rne_id=""):
 
     results = []
     with ThreadPoolExecutor(max_workers=8) as executor:
-        futures = {executor.submit(fn): key for key, fn in tasks.items()}
-        for future in as_completed(futures, timeout=35):
+        future_to_key = {executor.submit(fn): key for key, fn in tasks.items()}
+
+        # Attendre max 25 secondes — les futures non terminés sont ignorés
+        done, not_done = wait(future_to_key.keys(), timeout=25,
+                              return_when=ALL_COMPLETED)
+
+        # Annuler les futures en attente (non démarrés)
+        for f in not_done:
+            f.cancel()
+
+        # Récupérer les résultats des futures terminés
+        for future in done:
             try:
-                data, source = future.result(timeout=5)
+                data, source = future.result(timeout=1)
                 if data:
                     data["source"] = source
                     results.append(data)
