@@ -90,7 +90,8 @@ def export_csv():
         output = io.StringIO()
         writer = csv.DictWriter(output, fieldnames=[
             "id", "name", "city", "phone", "email", "website",
-            "all_phones", "all_emails", "confidence", "sources_hit", "created_at"
+            "all_phones", "all_emails", "confidence", "sources_hit",
+            "president", "address", "created_at"
         ])
         writer.writeheader()
         writer.writerows(rows)

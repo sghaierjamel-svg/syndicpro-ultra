@@ -11,7 +11,7 @@ DB_PATH = os.environ.get("DB_PATH", "data.db")
 REQUIRED_COLUMNS = {
     "id", "name", "city", "phone", "email", "website",
     "all_phones", "all_emails", "sources_hit", "confidence",
-    "found", "rne_id", "created_at"
+    "found", "rne_id", "president", "address", "created_at"
 }
 
 
@@ -45,6 +45,8 @@ def init_db():
             confidence  REAL DEFAULT 0,
             found       INTEGER DEFAULT 0,
             rne_id      TEXT DEFAULT '',
+            president   TEXT DEFAULT '',
+            address     TEXT DEFAULT '',
             created_at  DATETIME DEFAULT CURRENT_TIMESTAMP
         )
     """)
@@ -71,6 +73,8 @@ def init_db():
                 "confidence":  "REAL    DEFAULT 0",
                 "found":       "INTEGER DEFAULT 0",
                 "rne_id":      "TEXT    DEFAULT ''",
+                "president":   "TEXT    DEFAULT ''",
+                "address":     "TEXT    DEFAULT ''",
             }.get(col)
             if col_def:
                 try:
@@ -135,13 +139,15 @@ def save(data):
         ", ".join(data.get("sources_hit", [])),
         data.get("global_conf", 0),
         1 if data.get("found") else 0,
+        data.get("president", ""),
+        data.get("address", ""),
     )
 
     if existing:
         c.execute("""
             UPDATE results SET
                 phone=?, email=?, website=?, all_phones=?, all_emails=?,
-                sources_hit=?, confidence=?, found=?,
+                sources_hit=?, confidence=?, found=?, president=?, address=?,
                 created_at=CURRENT_TIMESTAMP
             WHERE id=?
         """, row + (existing["id"],))
@@ -149,8 +155,8 @@ def save(data):
         c.execute("""
             INSERT INTO results
                 (phone, email, website, all_phones, all_emails, sources_hit,
-                 confidence, found, name, city)
-            VALUES (?,?,?,?,?,?,?,?,?,?)
+                 confidence, found, president, address, name, city)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
         """, row + (data["name"], data["city"]))
 
     conn.commit()

@@ -48,7 +48,7 @@ async function loadStats() {
 async function loadResults(offset) {
   currentOffset = offset;
   const body = document.getElementById('resultsBody');
-  body.innerHTML = `<tr><td colspan="8"><div class="empty-state"><div class="spinner-large"></div><p>Chargement…</p></div></td></tr>`;
+  body.innerHTML = `<tr><td colspan="9"><div class="empty-state"><div class="spinner-large"></div><p>Chargement…</p></div></td></tr>`;
 
   try {
     const found = currentFilter === 'found' ? '1' : '0';
@@ -63,7 +63,7 @@ async function loadResults(offset) {
       `${rows.length} résultat(s) affiché(s) sur ${totalCount}`;
 
     if (!rows.length) {
-      body.innerHTML = `<tr><td colspan="8"><div class="empty-state"><div class="empty-icon">📭</div><p>Aucun résultat trouvé.</p></div></td></tr>`;
+      body.innerHTML = `<tr><td colspan="9"><div class="empty-state"><div class="empty-icon">📭</div><p>Aucun résultat trouvé.</p></div></td></tr>`;
       renderPagination(0);
       return;
     }
@@ -77,6 +77,7 @@ async function loadResults(offset) {
       const badge   = r.found
         ? `<span class="badge-found">✔ Trouvé</span>`
         : `<span class="badge-not-found">✘ Non trouvé</span>`;
+      const president = r.president ? escHtml(r.president) : '<span style="color:#94a3b8">—</span>';
 
       return `<tr>
         <td style="color:#94a3b8;font-size:.8rem">${offset + i + 1}</td>
@@ -84,6 +85,7 @@ async function loadResults(offset) {
         <td>${escHtml(r.city)}</td>
         <td>${phone}</td>
         <td style="word-break:break-all">${email}</td>
+        <td style="font-size:.82rem">${president}</td>
         <td>
           <span class="conf-pill" style="background:${confColor}20;color:${confColor}">${conf}%</span>
         </td>
@@ -95,7 +97,7 @@ async function loadResults(offset) {
     renderPagination(offset);
 
   } catch (e) {
-    body.innerHTML = `<tr><td colspan="8"><div class="alert-error">Erreur chargement : ${e.message}</div></td></tr>`;
+    body.innerHTML = `<tr><td colspan="9"><div class="alert-error">Erreur chargement : ${e.message}</div></td></tr>`;
   }
 }
 

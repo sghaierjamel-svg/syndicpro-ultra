@@ -279,6 +279,73 @@ def src_rne(name, city, rne_id):
     return extract_data(html), "rne"
 
 
+RNE_BORNE_SEARCH = "https://www.registre-entreprises.tn/api/rne-api/front-office/shortEntites"
+RNE_BORNE_ENTRIES = "https://www.registre-entreprises.tn/api/rne-borne-api/borne-entries"
+
+
+def src_rne_borne(name, city, short):
+    """
+    RNE registre-entreprises.tn — API publique gratuite.
+    Retourne le président, SG, trésorier, adresse officielle + ID RNE.
+    Ces infos servent ensuite à enrichir les recherches de contact.
+    """
+    result = {"phones": [], "emails": [], "websites": [],
+              "president": "", "address": "", "rne_id_found": ""}
+
+    ref = "https://www.registre-entreprises.tn/"
+
+    def _search(q):
+        try:
+            r = requests.get(RNE_BORNE_SEARCH, params={"denominationLatin": q},
+                             headers=_headers(ref), timeout=10)
+            if r.status_code == 200:
+                return r.json().get("registres", [])
+        except Exception:
+            pass
+        return []
+
+    # Essayer nom court, puis nom complet
+    registres = _search(short) or _search(name)
+    if not registres:
+        return result, "rne_borne"
+
+    best = registres[0]
+    id_unique = best.get("identifiantUnique", "")
+    denom_latin = best.get("denominationLatin", short)
+    result["rne_id_found"] = id_unique
+
+    # Chercher l'entrée borne pour obtenir le nom du président
+    try:
+        r2 = requests.get(RNE_BORNE_ENTRIES, params={"denominationLatin": denom_latin},
+                          headers=_headers(ref), timeout=10)
+        if r2.status_code == 200:
+            bornes = r2.json().get("bornes", [])
+            # Préférer l'entrée avec le bon identifiantUnique
+            borne_id = None
+            for b in bornes:
+                if b.get("identifiantUnique") == id_unique:
+                    borne_id = b.get("id")
+                    break
+            if not borne_id and bornes:
+                borne_id = bornes[0].get("id")
+
+            if borne_id:
+                r3 = requests.get(f"{RNE_BORNE_ENTRIES}/{borne_id}",
+                                  headers=_headers(ref), timeout=10)
+                if r3.status_code == 200:
+                    det = r3.json()
+                    president = (det.get("nomPresident") or
+                                 det.get("nomResponsable") or
+                                 det.get("nomSg") or
+                                 det.get("nomTresorier") or "")
+                    result["president"] = president.strip()
+                    result["address"] = (det.get("adresse") or "").strip()
+    except Exception:
+        pass
+
+    return result, "rne_borne"
+
+
 def src_contact_crawler(name, city, short):
     """
     Trouve les URLs dans les résultats de recherche,
@@ -329,19 +396,20 @@ def scrape_all(name, city, rne_id=""):
     sn = short_name(name)  # ex: "SYNDIC LES VIOLETTES" → "Les Violettes"
 
     tasks = {
-        "ddg":      lambda: src_ddg(name, city, sn),
-        "bing":     lambda: src_bing(name, city, sn),
-        "facebook": lambda: src_facebook_mobile(name, city, sn),
-        "google":   lambda: src_google(name, city, sn),
-        "arabic":   lambda: src_arabic(name, city, sn),
-        "pj_tn":    lambda: src_pj_tn(name, city, sn),
-        "annuaires":lambda: src_annuaire(name, city, sn),
-        "rne":      lambda: src_rne(name, city, rne_id),
-        "crawler":  lambda: src_contact_crawler(name, city, sn),
+        "ddg":       lambda: src_ddg(name, city, sn),
+        "bing":      lambda: src_bing(name, city, sn),
+        "facebook":  lambda: src_facebook_mobile(name, city, sn),
+        "google":    lambda: src_google(name, city, sn),
+        "arabic":    lambda: src_arabic(name, city, sn),
+        "pj_tn":     lambda: src_pj_tn(name, city, sn),
+        "annuaires": lambda: src_annuaire(name, city, sn),
+        "rne":       lambda: src_rne(name, city, rne_id),
+        "rne_borne": lambda: src_rne_borne(name, city, sn),
+        "crawler":   lambda: src_contact_crawler(name, city, sn),
     }
 
     results = []
-    with ThreadPoolExecutor(max_workers=9) as executor:
+    with ThreadPoolExecutor(max_workers=10) as executor:
         future_map = {executor.submit(fn): key for key, fn in tasks.items()}
         done, not_done = wait(future_map.keys(), timeout=28, return_when=ALL_COMPLETED)
         for f in not_done:

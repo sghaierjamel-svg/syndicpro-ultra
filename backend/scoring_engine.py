@@ -18,6 +18,9 @@ def compute_conformity(results):
     phone_sources  = {}   # phone → set of sources
     email_sources  = {}   # email → set of sources
     sources_with_data = []
+    president = ""
+    address   = ""
+    rne_id_found = ""
 
     for r in results:
         src = r.get("source", "?")
@@ -34,6 +37,14 @@ def compute_conformity(results):
             website_count[w] = website_count.get(w, 0) + 1
         if has_data:
             sources_with_data.append(src)
+        # Extraire les données RNE Borne
+        if r.get("president") and not president:
+            president = r["president"]
+            sources_with_data.append(src) if src not in sources_with_data else None
+        if r.get("address") and not address:
+            address = r["address"]
+        if r.get("rne_id_found") and not rne_id_found:
+            rne_id_found = r["rne_id_found"]
 
     def best(counts):
         if not counts:
@@ -72,16 +83,19 @@ def compute_conformity(results):
     global_conf = round((p_conf + e_conf) / 2, 1) if (phone or email) else 0
 
     return {
-        "phone":       phone,
-        "email":       email,
-        "website":     website,
-        "phone_conf":  p_conf,
-        "email_conf":  e_conf,
-        "global_conf": global_conf,
-        "all_phones":  sorted(phone_count.keys()),
-        "all_emails":  sorted(email_count.keys()),
-        "sources_hit": list(dict.fromkeys(sources_with_data)),  # ordre préservé, sans doublons
-        "found":       bool(phone or email),
+        "phone":        phone,
+        "email":        email,
+        "website":      website,
+        "phone_conf":   p_conf,
+        "email_conf":   e_conf,
+        "global_conf":  global_conf,
+        "all_phones":   sorted(phone_count.keys()),
+        "all_emails":   sorted(email_count.keys()),
+        "sources_hit":  list(dict.fromkeys(sources_with_data)),
+        "found":        bool(phone or email),
+        "president":    president,
+        "address":      address,
+        "rne_id_found": rne_id_found,
     }
 
 
@@ -91,4 +105,5 @@ def _empty():
         "phone_conf": 0, "email_conf": 0, "global_conf": 0,
         "all_phones": [], "all_emails": [],
         "sources_hit": [], "found": False,
+        "president": "", "address": "", "rne_id_found": "",
     }

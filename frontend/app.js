@@ -113,6 +113,10 @@ function renderResult(data) {
     extras.push(`<strong>Tous les téléphones :</strong> ${data.all_phones.join(' · ')}`);
   if (data.all_emails && data.all_emails.length > 1)
     extras.push(`<strong>Tous les emails :</strong> ${data.all_emails.join(' · ')}`);
+  if (data.president)
+    extras.push(`<strong>Président / Gérant (RNE) :</strong> ${data.president}`);
+  if (data.address)
+    extras.push(`<strong>Adresse (RNE) :</strong> ${data.address}`);
   if (extras.length) {
     allRow.innerHTML = extras.join('<br>');
     allRow.classList.remove('hidden');
