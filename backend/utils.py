@@ -44,7 +44,7 @@ def extract_data(html):
     if not html:
         return {"phones": [], "emails": [], "websites": []}
 
-    soup = BeautifulSoup(html, "lxml")
+    soup = BeautifulSoup(html, "html.parser")
 
     # Supprimer les balises inutiles
     for tag in soup(['script', 'style', 'noscript', 'meta', 'link', 'head']):
