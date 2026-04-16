@@ -33,37 +33,94 @@ searchForm.addEventListener('submit', async (e) => {
   const context = (document.getElementById('inputContext')?.value || '').trim();
   if (!name || !city) return;
 
-  // État chargement
-  searchBtnText.textContent = 'Recherche en cours…';
+  hideCandidates();
+  searchBtnText.textContent = 'Recherche RNE…';
   searchSpinner.classList.remove('hidden');
   searchBtn.disabled = true;
   resultBox.classList.add('hidden');
   errorBox.classList.add('hidden');
 
   try {
-    const res = await fetch(API + '/scrape', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name, city, context })
-    });
+    // ── Étape 1 : chercher les candidats RNE ──────────────────────────────
+    const candRes  = await fetch(`${API}/rne/candidates?name=${encodeURIComponent(name)}&city=${encodeURIComponent(city)}`);
+    const candData = await candRes.json();
+    const candidates = candData.candidates || [];
 
-    const data = await res.json();
-
-    if (!res.ok) {
-      showError(data.error || 'Erreur serveur');
-      return;
+    if (candidates.length === 0) {
+      // Pas de résultat RNE → scrape direct sans rne_id
+      await doScrape(name, city, context, '');
+    } else if (candidates.length === 1) {
+      // Un seul candidat → sélection automatique
+      await doScrape(name, city, context, candidates[0].rne_id);
+    } else {
+      // Plusieurs candidats → afficher la liste de sélection
+      showCandidates(candidates, name, city, context);
+      searchBtnText.textContent = 'Lancer la recherche';
+      searchSpinner.classList.add('hidden');
+      searchBtn.disabled = false;
     }
-
-    renderResult(data);
-
   } catch (err) {
     showError('Impossible de joindre le serveur. Vérifiez votre connexion.');
-  } finally {
     searchBtnText.textContent = 'Lancer la recherche';
     searchSpinner.classList.add('hidden');
     searchBtn.disabled = false;
   }
 });
+
+async function doScrape(name, city, context, rne_id) {
+  searchBtnText.textContent = 'Scraping en cours…';
+  searchSpinner.classList.remove('hidden');
+  searchBtn.disabled = true;
+  try {
+    const res = await fetch(API + '/scrape', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, city, context, rne_id })
+    });
+    const data = await res.json();
+    if (!res.ok) { showError(data.error || 'Erreur serveur'); return; }
+    hideCandidates();
+    renderResult(data);
+  } catch (err) {
+    showError('Impossible de joindre le serveur.');
+  } finally {
+    searchBtnText.textContent = 'Lancer la recherche';
+    searchSpinner.classList.add('hidden');
+    searchBtn.disabled = false;
+  }
+}
+
+function showCandidates(candidates, name, city, context) {
+  const box = document.getElementById('candidatesBox');
+  const list = document.getElementById('candidatesList');
+  list.innerHTML = candidates.map((c, i) => `
+    <div class="candidate-item" onclick="selectCandidate(${i})">
+      <div class="candidate-name">${escHtmlSimple(c.name_fr)}</div>
+      ${c.name_ar ? `<div class="candidate-name-ar">${escHtmlSimple(c.name_ar)}</div>` : ''}
+      <div class="candidate-id">ID RNE : ${escHtmlSimple(c.rne_id)}</div>
+    </div>
+  `).join('');
+  // Stocker les candidats pour la sélection
+  list._candidates = candidates;
+  list._ctx = { name, city, context };
+  box.classList.remove('hidden');
+}
+
+function hideCandidates() {
+  document.getElementById('candidatesBox')?.classList.add('hidden');
+}
+
+function selectCandidate(idx) {
+  const list = document.getElementById('candidatesList');
+  const { name, city, context } = list._ctx;
+  const rne_id = list._candidates[idx].rne_id;
+  hideCandidates();
+  doScrape(name, city, context, rne_id);
+}
+
+function escHtmlSimple(s) {
+  return String(s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
 
 function renderResult(data) {
   document.getElementById('resName').textContent = data.name || '—';

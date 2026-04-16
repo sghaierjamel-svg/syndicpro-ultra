@@ -439,12 +439,61 @@ def _rne_score(denom: str, name: str, city: str) -> float:
     return score
 
 
-def src_rne_borne(name, city, short):
+def _rne_fetch_details(rne_id: str, _api_get) -> dict | None:
+    """
+    Récupère les détails complets d'une entrée RNE à partir de son identifiantUnique.
+    Utilise le lookup direct par identifiantUnique (fiable à 100%).
+    """
+    bornes_data = _api_get(RNE_BORNE_ENTRIES, {"identifiantUnique": rne_id, "size": 5})
+    if not bornes_data:
+        return None
+    bornes = bornes_data.get("bornes", [])
+    borne  = next((b for b in bornes if b.get("identifiantUnique") == rne_id),
+                  bornes[0] if bornes else None)
+    if not borne:
+        return None
+    return _api_get(f"{RNE_BORNE_ENTRIES}/{borne['id']}", timeout=8)
+
+
+def get_rne_candidates(name: str, city: str) -> list:
+    """
+    Retourne tous les candidats RNE correspondant à un nom+ville.
+    Utilisé pour la sélection manuelle dans le frontend.
+    Chaque item : {rne_id, name_fr, name_ar, score}
+    """
+    sn = short_name(name)
+    seen = {}
+    headers_h = _headers(RNE_REFERER)
+
+    for term in [f"{sn} {city}", sn, name]:
+        try:
+            r = requests.get(RNE_BORNE_SEARCH,
+                             params={"denominationLatin": term, "size": 20},
+                             headers=headers_h, timeout=8)
+            if r.status_code == 200:
+                for e in r.json().get("registres", []):
+                    uid = e.get("identifiantUnique", "")
+                    if uid and uid not in seen:
+                        seen[uid] = {
+                            "rne_id":  uid,
+                            "name_fr": e.get("denominationLatin", ""),
+                            "name_ar": e.get("denomination", ""),
+                            "score":   _rne_score(e.get("denominationLatin", ""), name, city),
+                        }
+        except Exception:
+            pass
+
+    result = sorted(seen.values(), key=lambda x: x["score"], reverse=True)
+    for item in result:
+        item.pop("score", None)
+    return result
+
+
+def src_rne_borne(name, city, short, rne_id=""):
     """
     API publique registre-entreprises.tn.
-    Retourne tous les membres du bureau (Président, SG, Trésorier, Responsable),
-    l'adresse officielle et l'identifiant RNE.
-    Lance AUSSI une recherche contact par nom de chaque membre.
+    - Si rne_id fourni : lookup direct par identifiantUnique (100% fiable)
+    - Sinon : recherche par nom + scoring (meilleur candidat automatique)
     """
     result = {
         "phones": [], "emails": [], "websites": [],
@@ -462,68 +511,51 @@ def src_rne_borne(name, city, short):
             pass
         return None
 
-    # ── 1. Collecter des candidats dans shortEntites ───────────────────────────
-    # Du plus précis (short + city) au moins précis (short seul)
-    # short est déjà sans accents et sans préfixe grâce à short_name()
-    all_registres = {}   # identifiantUnique → entry
+    det          = None
+    id_unique    = rne_id
+    denom_latin  = short
 
-    for term in [f"{short} {city}", short, name]:
-        data = _api_get(RNE_BORNE_SEARCH, {"denominationLatin": term, "size": 20})
-        if data:
-            for entry in data.get("registres", []):
-                uid = entry.get("identifiantUnique", "")
-                if uid and uid not in all_registres:
-                    all_registres[uid] = entry
-        # Déjà trouvé avec le terme le plus précis : inutile d'aller plus loin
-        if all_registres and term == f"{short} {city}":
-            city_matches = [
-                e for e in all_registres.values()
-                if city.upper() in (e.get("denominationLatin") or "").upper()
-            ]
-            if city_matches:
-                # On a une correspondance claire ville+nom → stop
-                all_registres = {e["identifiantUnique"]: e for e in city_matches}
-                break
+    if rne_id:
+        # ── Voie directe : identifiantUnique connu ─────────────────────────────
+        det = _rne_fetch_details(rne_id, _api_get)
+        if det:
+            denom_latin = (det.get("denominationLatin") or short).strip()
+    else:
+        # ── Voie indirecte : recherche par nom + scoring ───────────────────────
+        all_registres = {}
+        for term in [f"{short} {city}", short, name]:
+            data = _api_get(RNE_BORNE_SEARCH, {"denominationLatin": term, "size": 20})
+            if data:
+                for entry in data.get("registres", []):
+                    uid = entry.get("identifiantUnique", "")
+                    if uid and uid not in all_registres:
+                        all_registres[uid] = entry
+            # Arrêt anticipé si correspondance ville claire dès la première requête
+            if all_registres and term == f"{short} {city}":
+                city_matches = [
+                    e for e in all_registres.values()
+                    if _deaccent(city).upper() in _deaccent(e.get("denominationLatin","")).upper()
+                ]
+                if city_matches:
+                    all_registres = {e["identifiantUnique"]: e for e in city_matches}
+                    break
 
-    if not all_registres:
-        return result, "rne_borne"
+        if not all_registres:
+            return result, "rne_borne"
 
-    # ── 2. Choisir le meilleur candidat par scoring ────────────────────────────
-    scored = sorted(
-        all_registres.values(),
-        key=lambda e: _rne_score(e.get("denominationLatin", ""), name, city),
-        reverse=True
-    )
-    best        = scored[0]
-    id_unique   = best.get("identifiantUnique", "")
-    denom_latin = best.get("denominationLatin", short)
-    result["rne_id_found"] = id_unique
-    result["denom_latin"]  = denom_latin
+        best       = max(all_registres.values(),
+                         key=lambda e: _rne_score(e.get("denominationLatin",""), name, city))
+        id_unique  = best.get("identifiantUnique", "")
+        denom_latin = best.get("denominationLatin", short)
+        det         = _rne_fetch_details(id_unique, _api_get)
 
-    # ── 3. Trouver l'entrée borne avec la dénomination exacte ──────────────────
-    # On cherche UNIQUEMENT avec denom_latin (la dénomination spécifique trouvée)
-    # → évite de mélanger des bornes d'autres résidences
-    bornes_data = _api_get(RNE_BORNE_ENTRIES, {"denominationLatin": denom_latin, "size": 10})
-    if not bornes_data:
-        # Fallback : essayer avec le short name seul
-        bornes_data = _api_get(RNE_BORNE_ENTRIES, {"denominationLatin": short, "size": 10})
-    if not bornes_data:
-        return result, "rne_borne"
-
-    bornes   = bornes_data.get("bornes", [])
-    # Priorité : correspondance exacte identifiantUnique → sinon premier résultat
-    borne_id = next(
-        (b["id"] for b in bornes if b.get("identifiantUnique") == id_unique),
-        bornes[0]["id"] if bornes else None
-    )
-    if not borne_id:
-        return result, "rne_borne"
-
-    # ── 4. Détails complets ────────────────────────────────────────────────────
-    det = _api_get(f"{RNE_BORNE_ENTRIES}/{borne_id}", timeout=8)
     if not det:
         return result, "rne_borne"
 
+    result["rne_id_found"] = id_unique
+    result["denom_latin"]  = denom_latin
+
+    # ── Extraction des membres ─────────────────────────────────────────────────
     members = [m for m in [
         _rne_member(det.get("nomPresident"),   "Président"),
         _rne_member(det.get("nomSg"),          "Secrétaire Général"),
@@ -534,7 +566,7 @@ def src_rne_borne(name, city, short):
         ),
         _rne_member(det.get("representantJuridFr"), "Représentant légal"),
     ] if m]
-    # Dédupliquer par nom
+
     seen_noms = set()
     unique_members = []
     for m in members:
@@ -546,15 +578,14 @@ def src_rne_borne(name, city, short):
     result["president"] = unique_members[0]["nom"] if unique_members else ""
     result["address"]   = (det.get("adresse") or "").strip()
 
-    # ── 5. Chercher les contacts des membres ──────────────────────────────────
+    # ── Recherche contacts des membres ────────────────────────────────────────
     sp, se = set(), set()
     for member in unique_members[:3]:
-        nom    = member["nom"]       # Latin (translittéré)
-        nom_ar = member.get("nom_ar", "")  # Arabe original si disponible
+        nom    = member["nom"]
+        nom_ar = member.get("nom_ar", "")
         if not nom or len(nom) < 4:
             continue
-        search_names = [n for n in [nom, nom_ar] if n and len(n) >= 4]
-        for search_nom in search_names:
+        for search_nom in [n for n in [nom, nom_ar] if n and len(n) >= 4]:
             for q in [
                 f'"{search_nom}" {city} email téléphone',
                 f'"{search_nom}" "{denom_latin}"',
@@ -568,12 +599,10 @@ def src_rne_borne(name, city, short):
             if result["phones"] or result["emails"]:
                 break
 
-        # Facebook : chercher la page personnelle du membre
         fb = fetch(f"https://mbasic.facebook.com/search/people/?q={quote(nom)}",
                    referer="https://mbasic.facebook.com/", timeout=6)
         _merge(result, extract_data(fb), sp, se)
 
-        # Bing : souvent meilleur pour les profils personnels
         bing_html = fetch(
             f"https://www.bing.com/search?q={quote(nom + ' ' + city + ' email téléphone')}&cc=TN",
             referer="https://www.bing.com/"
@@ -613,7 +642,7 @@ def scrape_all(name: str, city: str, rne_id: str = "", context: str = "") -> lis
         "annuaires": lambda: src_annuaire(name, city, sn, context),
         "linkedin":  lambda: src_linkedin(name, city, sn, context),
         "rne_old":   lambda: src_rne_old(name, city, rne_id),
-        "rne_borne": lambda: src_rne_borne(name, city, sn),
+        "rne_borne": lambda: src_rne_borne(name, city, sn, rne_id),
         "crawler":   lambda: src_contact_crawler(name, city, sn, context),
     }
 

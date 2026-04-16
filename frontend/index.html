@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>SyndicPro Scanner — Recherche de contacts syndics</title>
-  <link rel="stylesheet" href="style.css?v=6">
+  <link rel="stylesheet" href="style.css?v=7">
   <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🔍</text></svg>">
 </head>
 <body>
@@ -64,6 +64,15 @@
           <span id="searchBtnSpinner" class="spinner hidden"></span>
         </button>
       </form>
+    </div>
+
+    <!-- Sélection RNE (plusieurs candidats) -->
+    <div id="candidatesBox" class="hidden">
+      <div class="card candidates-card">
+        <h3 class="card-title">Plusieurs résidences trouvées dans le RNE — choisissez la bonne :</h3>
+        <p class="card-desc" style="margin-bottom:.75rem">Cliquez sur la résidence qui correspond à votre recherche.</p>
+        <div id="candidatesList" class="candidates-list"></div>
+      </div>
     </div>
 
     <!-- Résultats -->
@@ -189,6 +198,6 @@
   <a href="/dashboard" class="footer-link">Tableau de bord →</a>
 </footer>
 
-<script src="app.js?v=6"></script>
+<script src="app.js?v=7"></script>
 </body>
 </html>

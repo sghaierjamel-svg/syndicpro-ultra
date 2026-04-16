@@ -439,3 +439,23 @@ code { background: var(--gray-100); padding: .1em .35em; border-radius: 4px; fon
   .stats-grid { grid-template-columns: 1fr 1fr; }
   .btn-primary { width: 100%; }
 }
+
+/* ── Candidats RNE ── */
+.candidates-card { border: 2px solid var(--warning); }
+.candidates-card .card-title { color: var(--warning); }
+.candidates-list { display: flex; flex-direction: column; gap: .5rem; }
+.candidate-item {
+  padding: .75rem 1rem;
+  border: 1px solid var(--gray-200);
+  border-radius: 8px;
+  cursor: pointer;
+  transition: background .15s, border-color .15s;
+  background: var(--gray-50);
+}
+.candidate-item:hover {
+  background: var(--primary-lt);
+  border-color: var(--primary);
+}
+.candidate-name { font-weight: 600; font-size: .95rem; color: var(--gray-800); }
+.candidate-name-ar { font-size: .85rem; color: var(--gray-600); direction: rtl; margin-top: .15rem; }
+.candidate-id { font-size: .75rem; color: var(--gray-400); margin-top: .25rem; font-family: monospace; }

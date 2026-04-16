@@ -5,7 +5,7 @@ Nouveautés : enrichissement Excel asynchrone, cache, context générique.
 
 from flask import Flask, request, jsonify, send_file
 from flask_cors import CORS
-from scraper_engine import scrape_all
+from scraper_engine import scrape_all, get_rne_candidates
 from scoring_engine import compute_conformity
 from db import (init_db, save, get_all, get_stats, delete_all, seed_from_list,
                 set_cache, job_create, job_update, job_get)
@@ -63,6 +63,21 @@ def scrape():
         return jsonify(result)
     except Exception as e:
         app.logger.error(f"Erreur scrape({name},{city}): {e}\n{traceback.format_exc()}")
+        return jsonify({"error": str(e)}), 500
+
+
+# ── Candidats RNE (sélection manuelle) ────────────────────────────────────────
+
+@app.route("/rne/candidates")
+def rne_candidates():
+    name = (request.args.get("name") or "").strip()
+    city = (request.args.get("city") or "").strip()
+    if not name or not city:
+        return jsonify({"error": "Paramètres 'name' et 'city' requis"}), 400
+    try:
+        candidates = get_rne_candidates(name, city)
+        return jsonify({"candidates": candidates})
+    except Exception as e:
         return jsonify({"error": str(e)}), 500
 
 
