@@ -271,31 +271,66 @@ enrichBtn.addEventListener('click', async () => {
   const file = enrichBtn._file;
   if (!file) return;
 
-  enrichText.textContent = 'Traitement…';
+  const context = (document.getElementById('excelContext')?.value || '').trim();
+
+  enrichText.textContent = 'Envoi en cours…';
   enrichSpin.classList.remove('hidden');
   enrichBtn.disabled = true;
   enrichProg.classList.remove('hidden');
   enrichErr.classList.add('hidden');
 
+  const progText = document.getElementById('enrichProgText');
+  const progBar  = document.getElementById('enrichProgBar');
+
   try {
+    // ── Étape 1 : démarrer le job ──────────────────────────────────────────
     const fd = new FormData();
     fd.append('file', file);
+    if (context) fd.append('context', context);
 
-    const res = await fetch(API + '/enrich', {
-      method: 'POST',
-      body: fd
+    const startRes = await fetch(API + '/enrich/start', { method: 'POST', body: fd });
+    const startData = await startRes.json();
+    if (!startRes.ok) throw new Error(startData.error || 'Erreur démarrage');
+
+    const jobId = startData.job_id;
+    enrichText.textContent = 'Enrichissement en cours…';
+
+    // ── Étape 2 : polling statut ───────────────────────────────────────────
+    await new Promise((resolve, reject) => {
+      const poll = setInterval(async () => {
+        try {
+          const st = await fetch(`${API}/enrich/status/${jobId}`).then(r => r.json());
+          if (st.status === 'running' || st.status === 'pending') {
+            const pct = st.total > 0 ? Math.round((st.progress / st.total) * 100) : 0;
+            if (progText) progText.textContent = `${st.progress} / ${st.total} lignes traitées (${pct}%)`;
+            if (progBar)  progBar.style.width = pct + '%';
+          } else if (st.status === 'done') {
+            clearInterval(poll);
+            if (progText) progText.textContent = 'Terminé ! Téléchargement…';
+            if (progBar)  progBar.style.width = '100%';
+            resolve();
+          } else if (st.status === 'error') {
+            clearInterval(poll);
+            reject(new Error(st.error || 'Erreur enrichissement'));
+          }
+        } catch (e) {
+          clearInterval(poll);
+          reject(e);
+        }
+      }, 3000);
     });
 
-    if (!res.ok) {
-      const err = await res.json().catch(() => ({ error: 'Erreur serveur' }));
-      throw new Error(err.error || 'Erreur serveur');
+    // ── Étape 3 : télécharger le fichier ──────────────────────────────────
+    const dlRes = await fetch(`${API}/enrich/download/${jobId}`);
+    if (!dlRes.ok) {
+      const err = await dlRes.json().catch(() => ({ error: 'Erreur téléchargement' }));
+      throw new Error(err.error || 'Erreur téléchargement');
     }
-
-    const blob = await res.blob();
+    const blob = await dlRes.blob();
     const url  = URL.createObjectURL(blob);
     const a    = document.createElement('a');
     a.href     = url;
-    a.download = 'syndicats_enrichis.xlsx';
+    a.download = 'contacts_enrichis.xlsx';
     a.click();
     URL.revokeObjectURL(url);
 
@@ -307,5 +342,6 @@ enrichBtn.addEventListener('click', async () => {
     enrichSpin.classList.add('hidden');
     enrichBtn.disabled = false;
     enrichProg.classList.add('hidden');
+    if (progBar) progBar.style.width = '0%';
   }
 });

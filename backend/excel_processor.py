@@ -1,79 +1,127 @@
 """
-Enrichissement Excel — accepte un objet fichier upload Flask, retourne des bytes Excel.
+Enrichissement Excel — v3
+- Colonnes de sortie : téléphone, email, site, président, membres, adresse, confiance, sources
+- Callback de progression pour le traitement asynchrone
+- context optionnel par ligne
 """
+
 import io
 import time
+import json
 import openpyxl
+from openpyxl.styles import PatternFill, Font, Alignment
 from scraper_engine import scrape_all
 from scoring_engine import compute_conformity
 
 
-def enrich_excel(file_obj):
+def enrich_excel(file_obj, progress_callback=None, context=""):
     """
-    Prend un FileStorage Flask et retourne les bytes d'un Excel enrichi.
-    Colonnes attendues : 'Nom Résidence (FR)' et 'Ville' (ou 'Nom' et 'Ville').
+    Enrichit un fichier Excel et retourne les bytes du fichier résultat.
+
+    progress_callback(current, total) — appelé après chaque ligne traitée.
     """
     wb = openpyxl.load_workbook(file_obj)
     ws = wb.active
 
-    # Cartographier les entêtes existants → numéro de colonne
+    # ── Cartographie des entêtes ──────────────────────────────────────────────
     headers = {}
-    for cell in ws[1]:
-        if cell.value:
-            headers[str(cell.value).strip()] = cell.column
+    header_row = 1
+    # Chercher la ligne d'entête dans les 5 premières lignes
+    for ri in range(1, 6):
+        row_vals = [str(ws.cell(ri, c).value or "").strip() for c in range(1, ws.max_column + 1)]
+        if any(v for v in row_vals):
+            for ci, v in enumerate(row_vals, 1):
+                if v:
+                    headers[v] = ci
+            if headers:
+                header_row = ri
+                break
 
-    def ensure_col(name):
-        """Crée la colonne de résultat si absente, retourne son index."""
-        if name in headers:
-            return headers[name]
-        new_col = ws.max_column + 1
-        ws.cell(row=1, column=new_col, value=name)
-        headers[name] = new_col
-        return new_col
+    def col_idx(fragments):
+        """Trouve la colonne dont l'entête contient l'un des fragments."""
+        for frag in fragments:
+            for h, i in headers.items():
+                if frag.lower() in h.lower():
+                    return i
+        return None
 
-    # Colonnes source (flexible)
-    name_col = (headers.get("Nom Résidence (FR)")
-                or headers.get("Nom Résidence")
-                or headers.get("Nom")
-                or 1)
-    city_col = (headers.get("Ville")
-                or headers.get("Gouvernorat")
-                or 2)
+    def ensure_col(label):
+        if label in headers:
+            return headers[label]
+        idx = ws.max_column + 1
+        cell = ws.cell(header_row, idx, label)
+        cell.font = Font(bold=True, color="FFFFFF")
+        cell.fill = PatternFill("solid", fgColor="1E3A5F")
+        cell.alignment = Alignment(horizontal="center", wrap_text=True)
+        headers[label] = idx
+        return idx
 
-    # Colonnes résultat à ajouter
-    phone_col = ensure_col("Téléphone")
-    email_col = ensure_col("Email")
-    web_col   = ensure_col("Site Web")
-    conf_col  = ensure_col("Confiance (%)")
-    src_col   = ensure_col("Sources")
-    phones_col = ensure_col("Tous les téléphones")
-    emails_col = ensure_col("Tous les emails")
+    name_col = col_idx(["Nom Résidence", "Nom Residence", "Dénomination", "Denomination", "Nom"]) or 1
+    city_col = col_idx(["Ville", "Gouvernorat", "City"]) or 2
+    ctx_col  = col_idx(["Type", "Activité", "Activite", "Context"])  # optionnel
 
-    # Traiter chaque ligne de données
-    for row_num in range(2, ws.max_row + 1):
-        name = str(ws.cell(row=row_num, column=name_col).value or "").strip()
-        city = str(ws.cell(row=row_num, column=city_col).value or "").strip()
+    # Colonnes résultat
+    phone_col    = ensure_col("Téléphone")
+    email_col    = ensure_col("Email")
+    web_col      = ensure_col("Site Web")
+    pres_col     = ensure_col("Président / Gérant")
+    members_col  = ensure_col("Membres (bureau)")
+    address_col  = ensure_col("Adresse officielle")
+    conf_col     = ensure_col("Confiance (%)")
+    src_col      = ensure_col("Sources")
+    phones_col   = ensure_col("Tous les téléphones")
+    emails_col   = ensure_col("Tous les emails")
+
+    # Compter les lignes à traiter
+    data_rows = [
+        ri for ri in range(header_row + 1, ws.max_row + 1)
+        if str(ws.cell(ri, name_col).value or "").strip()
+    ]
+    total = len(data_rows)
+
+    # ── Traitement ligne par ligne ────────────────────────────────────────────
+    for idx, row_num in enumerate(data_rows, 1):
+        name = str(ws.cell(row_num, name_col).value or "").strip()
+        city = str(ws.cell(row_num, city_col).value or "").strip()
+        ctx  = str(ws.cell(row_num, ctx_col).value or "").strip() if ctx_col else context
         if not name or not city:
+            if progress_callback:
+                progress_callback(idx, total)
             continue
 
         try:
-            results = scrape_all(name, city)
-            data = compute_conformity(results)
+            raw     = scrape_all(name, city, context=ctx)
+            data    = compute_conformity(raw)
 
-            ws.cell(row=row_num, column=phone_col,  value=data.get("phone", ""))
-            ws.cell(row=row_num, column=email_col,  value=data.get("email", ""))
-            ws.cell(row=row_num, column=web_col,    value=data.get("website", ""))
-            ws.cell(row=row_num, column=conf_col,   value=data.get("global_conf", 0))
-            ws.cell(row=row_num, column=src_col,
-                    value=", ".join(data.get("sources_hit", [])))
-            ws.cell(row=row_num, column=phones_col,
-                    value=", ".join(data.get("all_phones", [])))
-            ws.cell(row=row_num, column=emails_col,
-                    value=", ".join(data.get("all_emails", [])))
-        except Exception:
-            pass
+            members_str = " | ".join(
+                f"{m['qualite']}: {m['nom']}"
+                for m in data.get("members", [])
+            )
 
-        time.sleep(0.5)  # politesse entre chaque scraping
+            ws.cell(row_num, phone_col,   data.get("phone",    ""))
+            ws.cell(row_num, email_col,   data.get("email",    ""))
+            ws.cell(row_num, web_col,     data.get("website",  ""))
+            ws.cell(row_num, pres_col,    data.get("president",""))
+            ws.cell(row_num, members_col, members_str)
+            ws.cell(row_num, address_col, data.get("address",  ""))
+            ws.cell(row_num, conf_col,    data.get("global_conf", 0))
+            ws.cell(row_num, src_col,     ", ".join(data.get("sources_hit", [])))
+            ws.cell(row_num, phones_col,  ", ".join(data.get("all_phones",  [])))
+            ws.cell(row_num, emails_col,  ", ".join(data.get("all_emails",  [])))
+
+            # Colorier la ligne si trouvé
+            if data.get("found"):
+                for c in range(1, ws.max_column + 1):
+                    ws.cell(row_num, c).fill = PatternFill("solid", fgColor="E8F5E9")
+
+        except Exception as e:
+            ws.cell(row_num, src_col, f"Erreur: {e}")
+
+        if progress_callback:
+            progress_callback(idx, total)
+
+        # Politesse entre requêtes (évite le ban)
+        time.sleep(0.3)
 
     output = io.BytesIO()
     wb.save(output)

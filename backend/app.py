@@ -1,64 +1,72 @@
 """
-SyndicPro Scanner — API Backend
-Recherche automatique de contacts pour syndicats tunisiens.
+SyndicPro Scanner — API Backend v4
+Nouveautés : enrichissement Excel asynchrone, cache, context générique.
 """
 
 from flask import Flask, request, jsonify, send_file
 from flask_cors import CORS
 from scraper_engine import scrape_all
 from scoring_engine import compute_conformity
-from db import init_db, save, get_all, get_stats, delete_all, seed_from_list
+from db import (init_db, save, get_all, get_stats, delete_all, seed_from_list,
+                set_cache, job_create, job_update, job_get)
 from excel_processor import enrich_excel
 import os
 import io
 import csv
+import base64
+import uuid
+import threading
+import logging
 import openpyxl
+import traceback
 
-app = Flask(__name__, static_folder='../frontend', static_url_path='')
+app    = Flask(__name__, static_folder='../frontend', static_url_path='')
 CORS(app)
+logging.basicConfig(level=logging.INFO)
 
 init_db()
 
-API_KEY = os.environ.get("API_KEY", "")  # optionnel — laisser vide pour désactiver
+API_KEY = os.environ.get("API_KEY", "")
 
 
 def check_key():
-    """Vérifie la clé API si configurée."""
     if not API_KEY:
         return True
     return request.headers.get("X-Api-Key") == API_KEY
 
 
-# ── Recherche d'un syndic ──────────────────────────────────────────────────────
+# ── Recherche ─────────────────────────────────────────────────────────────────
 
 @app.route("/scrape", methods=["POST"])
 def scrape():
     if not check_key():
         return jsonify({"error": "Clé API invalide"}), 401
 
-    data = request.get_json(silent=True) or {}
-    name    = (data.get("name")    or "").strip()
-    city    = (data.get("city")    or "").strip()
-    rne_id  = (data.get("rne_id")  or "").strip()
-    context = (data.get("context") or "").strip()
+    body    = request.get_json(silent=True) or {}
+    name    = (body.get("name")    or "").strip()
+    city    = (body.get("city")    or "").strip()
+    rne_id  = (body.get("rne_id")  or "").strip()
+    context = (body.get("context") or "").strip()
 
     if not name or not city:
         return jsonify({"error": "Les champs 'name' et 'city' sont obligatoires"}), 400
 
     try:
-        raw_results = scrape_all(name, city, rne_id=rne_id, context=context)
-        result = compute_conformity(raw_results)
+        raw    = scrape_all(name, city, rne_id=rne_id, context=context)
+        result = compute_conformity(raw)
         result["name"] = name
         result["city"] = city
         save(result)
+        # Mettre en cache si des contacts ont été trouvés
+        if result.get("found") or result.get("president"):
+            set_cache(name, city, result)
         return jsonify(result)
     except Exception as e:
-        import traceback
-        app.logger.error(f"Erreur scrape({name}, {city}): {e}\n{traceback.format_exc()}")
-        return jsonify({"error": f"Erreur: {str(e)}"}), 500
+        app.logger.error(f"Erreur scrape({name},{city}): {e}\n{traceback.format_exc()}")
+        return jsonify({"error": str(e)}), 500
 
 
-# ── Statistiques ───────────────────────────────────────────────────────────────
+# ── Stats ──────────────────────────────────────────────────────────────────────
 
 @app.route("/stats")
 def stats():
@@ -68,7 +76,7 @@ def stats():
         return jsonify({"error": str(e)}), 500
 
 
-# ── Liste des résultats ────────────────────────────────────────────────────────
+# ── Résultats ──────────────────────────────────────────────────────────────────
 
 @app.route("/results")
 def results():
@@ -88,57 +96,126 @@ def results():
 def export_csv():
     try:
         rows = get_all(limit=5000)
-        output = io.StringIO()
-        writer = csv.DictWriter(output, fieldnames=[
-            "id", "name", "city", "phone", "email", "website",
-            "all_phones", "all_emails", "confidence", "sources_hit",
-            "president", "address", "created_at"
-        ])
-        writer.writeheader()
-        writer.writerows(rows)
-        output.seek(0)
+        out  = io.StringIO()
+        w    = csv.DictWriter(out, fieldnames=[
+            "id","name","city","phone","email","website",
+            "all_phones","all_emails","confidence","sources_hit",
+            "president","address","created_at"
+        ], extrasaction="ignore")
+        w.writeheader()
+        w.writerows(rows)
+        out.seek(0)
         return send_file(
-            io.BytesIO(output.getvalue().encode("utf-8-sig")),
+            io.BytesIO(out.getvalue().encode("utf-8-sig")),
             mimetype="text/csv",
             as_attachment=True,
-            download_name="syndicats_contacts.csv"
+            download_name="contacts.csv"
         )
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
 
-# ── Enrichissement Excel ───────────────────────────────────────────────────────
+# ── Enrichissement Excel ASYNCHRONE ───────────────────────────────────────────
 
+def _run_excel_job(job_id: str, file_bytes: bytes, context: str):
+    """Traitement en arrière-plan — s'exécute dans un thread daemon."""
+    try:
+        def progress(cur, total):
+            job_update(job_id, status="running", progress=cur, total=total)
+
+        result_bytes = enrich_excel(
+            io.BytesIO(file_bytes),
+            progress_callback=progress,
+            context=context
+        )
+        b64 = base64.b64encode(result_bytes).decode()
+        job_update(job_id, status="done", result_b64=b64)
+    except Exception as e:
+        job_update(job_id, status="error", error=str(e))
+
+
+@app.route("/enrich/start", methods=["POST"])
+def enrich_start():
+    if not check_key():
+        return jsonify({"error": "Clé API invalide"}), 401
+    if "file" not in request.files:
+        return jsonify({"error": "Fichier Excel manquant"}), 400
+
+    uploaded = request.files["file"]
+    if not uploaded.filename.lower().endswith((".xlsx", ".xls")):
+        return jsonify({"error": "Format non supporté (.xlsx / .xls requis)"}), 400
+
+    context    = (request.form.get("context") or "").strip()
+    file_bytes = uploaded.read()
+    job_id     = str(uuid.uuid4())
+    job_create(job_id)
+
+    t = threading.Thread(target=_run_excel_job,
+                         args=(job_id, file_bytes, context),
+                         daemon=True)
+    t.start()
+    return jsonify({"job_id": job_id})
+
+
+@app.route("/enrich/status/<job_id>")
+def enrich_status(job_id):
+    job = job_get(job_id)
+    if not job:
+        return jsonify({"error": "Job inconnu"}), 404
+    # Ne pas renvoyer le fichier dans le status
+    return jsonify({
+        "status":   job["status"],
+        "progress": job["progress"],
+        "total":    job["total"],
+        "error":    job.get("error", ""),
+    })
+
+
+@app.route("/enrich/download/<job_id>")
+def enrich_download(job_id):
+    job = job_get(job_id)
+    if not job:
+        return jsonify({"error": "Job inconnu"}), 404
+    if job["status"] != "done":
+        return jsonify({"error": "Fichier pas encore prêt", "status": job["status"]}), 202
+    try:
+        result_bytes = base64.b64decode(job["result_b64"])
+        return send_file(
+            io.BytesIO(result_bytes),
+            mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            as_attachment=True,
+            download_name="contacts_enrichis.xlsx"
+        )
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+# Ancienne route synchrone conservée pour compatibilité (max ~5 lignes)
 @app.route("/enrich", methods=["POST"])
 def enrich():
     if not check_key():
         return jsonify({"error": "Clé API invalide"}), 401
-
     if "file" not in request.files:
-        return jsonify({"error": "Fichier Excel manquant (champ 'file')"}), 400
-
+        return jsonify({"error": "Fichier Excel manquant"}), 400
     uploaded = request.files["file"]
-    if not uploaded.filename.endswith((".xlsx", ".xls")):
-        return jsonify({"error": "Format non supporté. Utilisez .xlsx ou .xls"}), 400
-
+    if not uploaded.filename.lower().endswith((".xlsx", ".xls")):
+        return jsonify({"error": "Format non supporté"}), 400
     try:
         result_bytes = enrich_excel(uploaded)
         return send_file(
             io.BytesIO(result_bytes),
             mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             as_attachment=True,
-            download_name="syndicats_enrichis.xlsx"
+            download_name="contacts_enrichis.xlsx"
         )
     except Exception as e:
-        app.logger.error(f"Erreur enrich: {e}")
-        return jsonify({"error": f"Erreur traitement Excel: {str(e)}"}), 500
+        return jsonify({"error": str(e)}), 500
 
 
-# ── Import seed depuis Excel RNE ──────────────────────────────────────────────
+# ── Import seed RNE ────────────────────────────────────────────────────────────
 
 @app.route("/import/seed", methods=["POST"])
 def import_seed():
-    """Importe une liste de syndics depuis Excel sans scraper (juste nom+ville+ID RNE)."""
     if "file" not in request.files:
         return jsonify({"error": "Fichier Excel manquant"}), 400
     uploaded = request.files["file"]
@@ -146,67 +223,63 @@ def import_seed():
         wb = openpyxl.load_workbook(uploaded)
         ws = wb.active
 
-        # Détecter la ligne d'entête (chercher 'Nom Résidence' dans les 5 premières lignes)
         header_row = None
+        headers    = []
         for i, row in enumerate(ws.iter_rows(min_row=1, max_row=5, values_only=True), 1):
-            if any(str(v or '').startswith('Nom') for v in row):
+            if any(str(v or '').strip() for v in row):
                 header_row = i
-                headers = [str(v or '').strip() for v in row]
+                headers    = [str(v or '').strip() for v in row]
                 break
 
         if not header_row:
-            return jsonify({"error": "Entêtes non trouvées (colonne 'Nom Résidence' introuvable)"}), 400
+            return jsonify({"error": "Entêtes non trouvées"}), 400
 
-        def col(name_fragment):
-            for i, h in enumerate(headers):
-                if name_fragment.lower() in h.lower():
-                    return i
+        def col(frags):
+            for frag in frags:
+                for i, h in enumerate(headers):
+                    if frag.lower() in h.lower():
+                        return i
             return None
 
-        name_col  = col('Nom Résidence') or col('Nom')
-        city_col  = col('Ville')
-        gov_col   = col('Gouvernorat')
-        rne_col   = col('ID RNE') or col('RNE')
+        name_col = col(["Nom Résidence", "Nom Residence", "Nom", "Dénomination"])
+        city_col = col(["Ville", "City"])
+        gov_col  = col(["Gouvernorat"])
+        rne_col  = col(["ID RNE", "RNE", "Identifiant"])
 
         if name_col is None:
-            return jsonify({"error": "Colonne 'Nom Résidence' introuvable"}), 400
+            return jsonify({"error": "Colonne 'Nom' introuvable"}), 400
 
         syndics = []
         for row in ws.iter_rows(min_row=header_row + 1, values_only=True):
-            name = str(row[name_col] or '').strip()
-            city = str(row[city_col] or row[gov_col] or '').strip() if (city_col is not None) else ''
-            if not city and gov_col is not None:
-                city = str(row[gov_col] or '').strip()
-            rne_id = str(row[rne_col] or '').strip() if rne_col is not None else ''
+            name = str(row[name_col] or "").strip()
+            city = str(row[city_col] if city_col is not None else "").strip() or \
+                   str(row[gov_col]  if gov_col  is not None else "").strip()
+            rne  = str(row[rne_col] if rne_col is not None else "").strip()
             if name and city:
-                syndics.append({"name": name, "city": city, "rne_id": rne_id})
+                syndics.append({"name": name, "city": city, "rne_id": rne})
 
         inserted = seed_from_list(syndics)
         return jsonify({"status": "ok", "inserted": inserted, "total": len(syndics)})
-
     except Exception as e:
-        app.logger.error(f"Erreur import/seed: {e}")
         return jsonify({"error": str(e)}), 500
 
 
-# ── Supprimer tous les résultats ───────────────────────────────────────────────
+# ── Admin ──────────────────────────────────────────────────────────────────────
 
 @app.route("/results/clear", methods=["POST"])
 def clear_results():
     if not check_key():
         return jsonify({"error": "Clé API invalide"}), 401
     delete_all()
-    return jsonify({"status": "ok", "message": "Base de données vidée"})
+    return jsonify({"status": "ok"})
 
-
-# ── Health check ───────────────────────────────────────────────────────────────
 
 @app.route("/health")
 def health():
-    return jsonify({"status": "ok", "version": "2.0"})
+    return jsonify({"status": "ok", "version": "4.0"})
 
 
-# ── Frontend pages ─────────────────────────────────────────────────────────────
+# ── Pages frontend ─────────────────────────────────────────────────────────────
 
 @app.route("/")
 def index():

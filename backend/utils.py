@@ -1,84 +1,157 @@
 """
-Extraction et normalisation des données de contact tunisiennes.
+Extraction et normalisation des données de contact tunisiennes — v2
+Améliorations : réduction des faux positifs, emails obfusqués, tel: links.
 """
 
 import re
 from bs4 import BeautifulSoup
 
-# Numéros tunisiens : 8 chiffres commençant par 2-9, optionnellement précédés de +216 ou 216
-RE_PHONE = re.compile(
+# ── Téléphones ──────────────────────────────────────────────────────────────
+
+# Format avec séparateurs : XX XXX XXX ou XX-XXX-XXX ou XX.XXX.XXX
+# Très fiable, peu de faux positifs
+RE_PHONE_SEP = re.compile(
     r'(?:(?:\+|00)216[\s.\-]?)?'
-    r'(?:(?:\d{2}[\s.\-]\d{3}[\s.\-]\d{3})|(?:[2-9]\d{7}))',
-    re.VERBOSE
+    r'\b([2-9]\d[\s.\-]\d{3}[\s.\-]\d{3})\b'
 )
 
+# Format compact (8 chiffres) — seulement après un mot-clé téléphonique
+RE_PHONE_KEYWORD = re.compile(
+    r'(?:tél?\.?|gsm|mob(?:ile)?\.?|fixe|num[ée]ro|tel\.?|contact|appel|'
+    r'joindre|appeler|ligne|portable|cel\.?)\s*[:\s\-]*'
+    r'(?:(?:\+|00)?216[\s.\-]?)?'
+    r'([2-9]\d{7})',
+    re.IGNORECASE | re.UNICODE
+)
+
+# Format +216XXXXXXXX ou 00216XXXXXXXX — très fiable
+RE_PHONE_INTL = re.compile(
+    r'(?:\+216|00216)[\s.\-]?([2-9]\d{7}|\d{2}[\s.\-]\d{3}[\s.\-]\d{3})'
+)
+
+# ── Emails ──────────────────────────────────────────────────────────────────
+
 RE_EMAIL = re.compile(
-    r'[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.(?:tn|com|fr|net|org|info)',
+    r'[a-zA-Z0-9._%+\-]{2,}@[a-zA-Z0-9.\-]+\.(?:tn|com|fr|net|org|info|biz)',
     re.IGNORECASE
 )
+
+# Emails obfusqués : nom[at]domaine.tn  ou  nom (at) domaine.tn
+RE_EMAIL_OBFUSCATED = re.compile(
+    r'([a-zA-Z0-9._%+\-]{2,})\s*[\[\(]\s*at\s*[\]\)]\s*([a-zA-Z0-9.\-]+\.[a-zA-Z]{2,4})',
+    re.IGNORECASE
+)
+
+# ── Sites web ───────────────────────────────────────────────────────────────
 
 RE_WEBSITE = re.compile(
     r'https?://(?:www\.)?([a-zA-Z0-9\-]+\.(?:tn|com|fr|net))',
     re.IGNORECASE
 )
 
+NOISE_DOMAINS = {
+    'google', 'bing', 'duckduckgo', 'yahoo', 'youtube', 'wikipedia',
+    'twitter', 'instagram', 'tiktok', 'amazon', 'apple', 'microsoft',
+    'whatsapp', 'linkedin', 'facebook', 'gstatic', 'googleapis',
+}
 
-def normalize_phone(raw):
-    """Normalise un numéro tunisien au format +216XXXXXXXX."""
-    # Garder uniquement chiffres et +
+# Mots qui indiquent qu'un nombre est une date / référence légale / ID
+_DATE_CONTEXT = re.compile(
+    r'(?:janvier|février|mars|avril|mai|juin|juillet|août|septembre|'
+    r'octobre|novembre|décembre|article|décret|arrêté|loi|n°|num\.?\s*dossier|'
+    r'réf(?:érence)?|code|ref\.|copie)',
+    re.IGNORECASE
+)
+
+
+def normalize_phone(raw: str) -> str:
+    """Normalise un numéro tunisien → +216XXXXXXXX."""
     d = re.sub(r'[^\d]', '', raw)
-
     if d.startswith('00216'):
         d = d[5:]
-    elif d.startswith('216'):
+    elif d.startswith('216') and len(d) == 11:
         d = d[3:]
-
-    # Doit faire exactement 8 chiffres, commencer par 2-9
     if len(d) == 8 and d[0] in '23456789':
         return f"+216{d}"
     return ""
 
 
-def extract_data(html):
+def extract_data(html: str) -> dict:
     """Extrait téléphones, emails et sites depuis du HTML brut."""
     if not html:
         return {"phones": [], "emails": [], "websites": []}
 
     soup = BeautifulSoup(html, "html.parser")
-
-    # Supprimer les balises inutiles
     for tag in soup(['script', 'style', 'noscript', 'meta', 'link', 'head']):
         tag.decompose()
 
-    # Extraire les liens tel: (très fiables)
-    tel_phones = []
+    # ── 1. Liens tel: (source la plus fiable) ────────────────────────────────
+    tel_phones: list[str] = []
     for a in soup.find_all('a', href=True):
         href = a['href']
         if href.startswith('tel:'):
-            raw = re.sub(r'[^\d+]', '', href.replace('tel:', ''))
-            tel_phones.append(raw)
+            raw = re.sub(r'[^\d+]', '', href[4:])
+            n   = normalize_phone(raw)
+            if n:
+                tel_phones.append(n)
 
     text = soup.get_text(" ", strip=True)
 
-    # Téléphones dans le texte + liens tel:
-    raw_phones = RE_PHONE.findall(text) + tel_phones
-    phones = []
-    seen = set()
-    for p in raw_phones:
-        normalized = normalize_phone(p)
-        if normalized and normalized not in seen:
-            seen.add(normalized)
-            phones.append(normalized)
+    # ── 2. Téléphones dans le texte ───────────────────────────────────────────
+    seen_phones: set[str] = set(tel_phones)
+    phones: list[str]     = list(tel_phones)
 
-    # Emails
-    emails = list({e.lower() for e in RE_EMAIL.findall(text)})
+    def _add_phone(raw_match):
+        n = normalize_phone(re.sub(r'\s', '', raw_match))
+        if n and n not in seen_phones:
+            # Vérifier le contexte autour du nombre dans le texte
+            idx = text.find(raw_match.replace(' ', ''))
+            if idx > 0:
+                ctx = text[max(0, idx-60):idx+20]
+                if _DATE_CONTEXT.search(ctx):
+                    return  # probablement un numéro légal/date
+            seen_phones.add(n)
+            phones.append(n)
 
-    # Sites web (optionnel, pour enrichissement futur)
-    websites = list({m for m in RE_WEBSITE.findall(text)
-                     if not m.startswith(('bing.', 'google.', 'duckduckgo.', 'facebook.', 'twitter.', 'youtube.'))})
+    for m in RE_PHONE_INTL.finditer(text):
+        _add_phone(m.group(1))
 
-    return {
-        "phones": phones,
-        "emails": emails,
-        "websites": websites[:5],
-    }
+    for m in RE_PHONE_SEP.finditer(text):
+        _add_phone(m.group(1))
+
+    for m in RE_PHONE_KEYWORD.finditer(text):
+        _add_phone(m.group(1))
+
+    # ── 3. Emails ─────────────────────────────────────────────────────────────
+    seen_emails: set[str] = set()
+    emails: list[str]     = []
+
+    for e in RE_EMAIL.findall(text):
+        e = e.lower()
+        if e not in seen_emails:
+            seen_emails.add(e)
+            emails.append(e)
+
+    # Emails obfusqués
+    for m in RE_EMAIL_OBFUSCATED.finditer(text):
+        e = f"{m.group(1)}@{m.group(2)}".lower()
+        if e not in seen_emails:
+            seen_emails.add(e)
+            emails.append(e)
+
+    # Emails dans les liens mailto:
+    for a in soup.find_all('a', href=True):
+        href = a['href']
+        if href.startswith('mailto:'):
+            e = href[7:].split('?')[0].strip().lower()
+            if RE_EMAIL.match(e) and e not in seen_emails:
+                seen_emails.add(e)
+                emails.append(e)
+
+    # ── 4. Sites web ──────────────────────────────────────────────────────────
+    websites = list({
+        m for m in RE_WEBSITE.findall(text)
+        if m.split('.')[0] not in NOISE_DOMAINS
+    })[:5]
+
+    return {"phones": phones, "emails": emails, "websites": websites}

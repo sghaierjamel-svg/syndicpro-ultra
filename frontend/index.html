@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>SyndicPro Scanner — Recherche de contacts syndics</title>
-  <link rel="stylesheet" href="style.css?v=5">
+  <link rel="stylesheet" href="style.css?v=6">
   <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🔍</text></svg>">
 </head>
 <body>
@@ -141,14 +141,25 @@
         <p id="fileName" class="file-name hidden"></p>
       </div>
 
-      <button class="btn-primary" id="enrichBtn" disabled>
+      <div class="form-group" style="margin-top:.75rem">
+        <label for="excelContext">Type d'activité <span style="color:#94a3b8;font-weight:400">(optionnel — s'applique à toutes les lignes si la colonne Type est absente)</span></label>
+        <input type="text" id="excelContext" placeholder="ex: syndic, restaurant, cabinet médical…">
+      </div>
+
+      <button class="btn-primary" id="enrichBtn" disabled style="margin-top:.5rem">
         <span id="enrichBtnText">Enrichir le fichier</span>
         <span id="enrichSpinner" class="spinner hidden"></span>
       </button>
 
       <div id="enrichProgress" class="enrich-info hidden">
-        <div class="spinner-large"></div>
-        <p>Enrichissement en cours… Cela peut prendre plusieurs minutes selon le nombre de lignes.</p>
+        <div style="display:flex;align-items:center;gap:.75rem;margin-bottom:.5rem">
+          <div class="spinner-large"></div>
+          <span id="enrichProgText" style="font-size:.9rem;color:#1e40af">Démarrage…</span>
+        </div>
+        <div style="background:#e2e8f0;border-radius:8px;height:10px;overflow:hidden">
+          <div id="enrichProgBar" style="height:100%;width:0%;background:var(--primary);transition:width .4s ease;border-radius:8px"></div>
+        </div>
+        <p style="font-size:.8rem;color:#64748b;margin-top:.4rem">Le traitement continue en arrière-plan — vous pouvez fermer l'onglet, mais restez sur cette page pour télécharger le résultat.</p>
       </div>
 
       <div id="enrichError" class="alert-error hidden"></div>
@@ -158,13 +169,12 @@
       <h3 class="card-title">Format requis</h3>
       <table class="tips-table">
         <thead>
-          <tr><th>Colonne A</th><th>Colonne B</th><th>Colonnes ajoutées automatiquement</th></tr>
+          <tr><th>Colonnes requises</th><th>Colonnes ajoutées automatiquement</th></tr>
         </thead>
         <tbody>
           <tr>
-            <td>Nom Résidence (FR)</td>
-            <td>Ville</td>
-            <td>Téléphone · Email · Site Web · Confiance (%) · Sources · Tous les téléphones · Tous les emails</td>
+            <td>Nom Résidence / Nom (col. A) · Ville (col. B)</td>
+            <td>Téléphone · Email · Site Web · Président / Gérant · Membres (bureau) · Adresse officielle · Confiance (%) · Sources · Tous les téléphones · Tous les emails</td>
           </tr>
         </tbody>
       </table>
@@ -179,6 +189,6 @@
   <a href="/dashboard" class="footer-link">Tableau de bord →</a>
 </footer>
 
-<script src="app.js?v=5"></script>
+<script src="app.js?v=6"></script>
 </body>
 </html>
