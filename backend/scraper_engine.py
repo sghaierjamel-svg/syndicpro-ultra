@@ -692,10 +692,18 @@ def src_rne_borne(name, city, short, rne_id=""):
         if not all_registres:
             return result, "rne_borne"
 
-        best       = max(all_registres.values(),
-                         key=lambda e: _rne_score(e.get("denominationLatin",""), name, city))
-        id_unique  = best.get("identifiantUnique", "")
-        denom_latin = best.get("denominationLatin", short)
+        scored = [(e, _rne_score(e.get("denominationLatin",""), name, city))
+                  for e in all_registres.values()]
+        best_entry, best_score = max(scored, key=lambda x: x[1])
+
+        # Seuil minimum : éviter de prendre une entité sans rapport
+        # (ex: "El Yassamine" quand on cherche "Meziana" → score=30 car seul
+        # "RESIDENCE" correspond — ce n'est pas assez)
+        if best_score < 40:
+            return result, "rne_borne"
+
+        id_unique   = best_entry.get("identifiantUnique", "")
+        denom_latin = best_entry.get("denominationLatin", short)
         det         = _rne_fetch_details(id_unique, _api_get)
 
     if not det:
