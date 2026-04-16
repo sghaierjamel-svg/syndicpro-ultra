@@ -516,7 +516,7 @@ def debug_scrape():
     """
     name   = (request.args.get("name")   or "SYNDIC DES COPROPRIETAIRES DE LA RESIDENCE EL YASSAMINE").strip()
     city   = (request.args.get("city")   or "Sousse").strip()
-    rne_id = (request.args.get("rne_id") or "1977113T").strip()
+    rne_id = (request.args.get("rne_id") or "").strip()
 
     from scraper_engine import scrape_all
     from scoring_engine import compute_conformity
