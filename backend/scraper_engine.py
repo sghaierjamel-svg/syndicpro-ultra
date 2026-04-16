@@ -20,6 +20,7 @@ import time
 import threading
 import base64
 import os
+import logging
 from urllib.parse import quote, urlparse, unquote
 from concurrent.futures import ThreadPoolExecutor, wait, ALL_COMPLETED
 from bs4 import BeautifulSoup
