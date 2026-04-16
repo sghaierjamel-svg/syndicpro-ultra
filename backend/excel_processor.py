@@ -58,7 +58,8 @@ def enrich_excel(file_obj, progress_callback=None, context=""):
 
     name_col = col_idx(["Nom Résidence", "Nom Residence", "Dénomination", "Denomination", "Nom"]) or 1
     city_col = col_idx(["Ville", "Gouvernorat", "City"]) or 2
-    ctx_col  = col_idx(["Type", "Activité", "Activite", "Context"])  # optionnel
+    ctx_col  = col_idx(["Type", "Activité", "Activite", "Context"])   # optionnel
+    rne_col  = col_idx(["ID RNE", "RNE", "Identifiant", "rne_id"])    # optionnel
 
     # Colonnes résultat
     phone_col    = ensure_col("Téléphone")
@@ -71,6 +72,7 @@ def enrich_excel(file_obj, progress_callback=None, context=""):
     src_col      = ensure_col("Sources")
     phones_col   = ensure_col("Tous les téléphones")
     emails_col   = ensure_col("Tous les emails")
+    rne_out_col  = ensure_col("ID RNE")
 
     # Compter les lignes à traiter
     data_rows = [
@@ -81,16 +83,17 @@ def enrich_excel(file_obj, progress_callback=None, context=""):
 
     # ── Traitement ligne par ligne ────────────────────────────────────────────
     for idx, row_num in enumerate(data_rows, 1):
-        name = str(ws.cell(row_num, name_col).value or "").strip()
-        city = str(ws.cell(row_num, city_col).value or "").strip()
-        ctx  = str(ws.cell(row_num, ctx_col).value or "").strip() if ctx_col else context
+        name   = str(ws.cell(row_num, name_col).value or "").strip()
+        city   = str(ws.cell(row_num, city_col).value or "").strip()
+        ctx    = str(ws.cell(row_num, ctx_col).value or "").strip() if ctx_col else context
+        rne_id = str(ws.cell(row_num, rne_col).value or "").strip() if rne_col else ""
         if not name or not city:
             if progress_callback:
                 progress_callback(idx, total)
             continue
 
         try:
-            raw     = scrape_all(name, city, context=ctx)
+            raw     = scrape_all(name, city, rne_id=rne_id, context=ctx)
             data    = compute_conformity(raw)
 
             members_str = " | ".join(
@@ -108,6 +111,7 @@ def enrich_excel(file_obj, progress_callback=None, context=""):
             ws.cell(row_num, src_col,     ", ".join(data.get("sources_hit", [])))
             ws.cell(row_num, phones_col,  ", ".join(data.get("all_phones",  [])))
             ws.cell(row_num, emails_col,  ", ".join(data.get("all_emails",  [])))
+            ws.cell(row_num, rne_out_col, data.get("rne_id", "") or rne_id)
 
             # Colorier la ligne si trouvé
             if data.get("found"):

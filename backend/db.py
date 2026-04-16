@@ -259,6 +259,8 @@ def save(data):
         (data["name"], data["city"])
     ).fetchone()
 
+    rne_id = (data.get("rne_id") or data.get("rne_id_found") or "").strip()
+
     row = (
         data.get("phone",    ""),
         data.get("email",    ""),
@@ -271,6 +273,7 @@ def save(data):
         data.get("president", ""),
         _members_json(data.get("members", [])),
         data.get("address", ""),
+        rne_id,
     )
 
     if existing:
@@ -278,15 +281,16 @@ def save(data):
             UPDATE results SET
                 phone=?, email=?, website=?, all_phones=?, all_emails=?,
                 sources_hit=?, confidence=?, found=?, president=?, members=?,
-                address=?, created_at=CURRENT_TIMESTAMP
+                address=?, rne_id=CASE WHEN rne_id='' THEN ? ELSE rne_id END,
+                created_at=CURRENT_TIMESTAMP
             WHERE id=?
         """, row + (existing["id"],))
     else:
         c.execute("""
             INSERT INTO results
                 (phone, email, website, all_phones, all_emails, sources_hit,
-                 confidence, found, president, members, address, name, city)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
+                 confidence, found, president, members, address, rne_id, name, city)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
         """, row + (data["name"], data["city"]))
 
     conn.commit()

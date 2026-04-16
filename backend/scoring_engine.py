@@ -6,7 +6,7 @@ Corrections :
   - sources haute confiance (RNE, facebook, crawler) boostent le score
 """
 
-HIGH_TRUST_SOURCES = {"rne_borne", "rne", "pagesjaunes", "yellow_tn", "crawler", "facebook"}
+HIGH_TRUST_SOURCES = {"rne_borne", "rne_entite", "rne", "pagesjaunes", "yellow_tn", "crawler", "facebook"}
 
 
 def compute_conformity(results):
@@ -119,7 +119,7 @@ def compute_conformity(results):
         "all_phones":   sorted(phone_count.keys()),
         "all_emails":   sorted(email_count.keys()),
         "sources_hit":  list(dict.fromkeys(sources_with_data)),
-        "found":        bool(phone or email),
+        "found":        bool(phone or email or president or members),
         "president":    president,
         "members":      members,
         "address":      address,

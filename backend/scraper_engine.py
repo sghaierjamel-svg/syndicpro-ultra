@@ -786,6 +786,20 @@ def scrape_all(name: str, city: str, rne_id: str = "", context: str = "") -> lis
             except Exception:
                 pass
 
+    # ── Phase 1.5 : RNE entite (email officiel) si rne_id maintenant connu ──────
+    # Si rne_id n'était pas fourni au départ mais que rne_borne l'a trouvé,
+    # on lance src_rne_entite maintenant (1 requête rapide, ~1s).
+    effective_rne_id = rne_id or (rne_borne_r.get("rne_id_found") if rne_borne_r else "")
+    if effective_rne_id and not rne_id:
+        # rne_entite n'a pas tourné en Phase 1 (rne_id était vide)
+        try:
+            entite_data, entite_src = src_rne_entite(effective_rne_id)
+            if entite_data.get("emails"):
+                entite_data["source"] = entite_src
+                results.append(entite_data)
+        except Exception:
+            pass
+
     # ── Phase 2 : recherche personnelle des membres (uniquement si RNE trouvé) ─
     if rne_borne_r and rne_borne_r.get("members"):
         members     = rne_borne_r["members"]
