@@ -446,12 +446,36 @@ def debug_rne():
         report["erreur"] = f"Erreur lors de _get_rne_token() : {e}"
         return jsonify(report)
 
+    # Appel brut à l'API pour voir tous les champs retournés
     try:
-        data, _ = src_rne_entite(report["test_rne_id"])
-        emails = data.get("emails", [])
-        report["test_email"] = emails[0] if emails else "(aucun email retourné)"
+        import requests as _req
+        r = _req.get(
+            f"https://www.registre-entreprises.tn/api/rne-api/front-office/entites/{report['test_rne_id']}",
+            headers={
+                "Authorization": f"Bearer {token}",
+                "Referer": "https://www.registre-entreprises.tn/",
+                "Accept": "application/json",
+            },
+            timeout=15
+        )
+        report["http_status"] = r.status_code
+        if r.status_code == 200 and r.text:
+            raw = r.json()
+            # Afficher tous les champs de premier niveau (valeurs tronquées)
+            report["champs_disponibles"] = {
+                k: (str(v)[:80] if v not in (None, "", [], {}) else "(vide)")
+                for k, v in raw.items()
+            }
+            # Chercher tout champ contenant "email" ou "mail" ou "tel" ou "gsm"
+            report["champs_contact"] = {
+                k: str(v)
+                for k, v in raw.items()
+                if any(x in k.lower() for x in ["email","mail","tel","gsm","phone","contact"])
+            }
+        else:
+            report["erreur"] = f"HTTP {r.status_code} — {r.text[:200]}"
     except Exception as e:
-        report["erreur"] = f"Erreur lors de src_rne_entite() : {e}"
+        report["erreur"] = f"Erreur appel direct : {e}"
 
     return jsonify(report)
 
