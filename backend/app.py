@@ -449,25 +449,26 @@ def debug_rne():
         "Accept": "application/json",
     }
 
-    # Étape 1 : trouver un vrai rne_id (paramètre ?rne_id= ou recherche auto)
+    # Étape 1 : trouver un vrai rne_id via l'API PUBLIQUE (sans token)
     rne_id_test = request.args.get("rne_id", "").strip()
     if not rne_id_test:
         try:
             rs = _req.get(
                 "https://www.registre-entreprises.tn/api/rne-api/front-office/shortEntites",
-                params={"page": 0, "size": 5, "search": "syndic"},
-                headers=hdrs, timeout=15
+                params={"page": 0, "size": 5, "raisonSociale": "syndic résidence"},
+                headers={"Referer": "https://www.registre-entreprises.tn/",
+                         "Accept": "application/json"},
+                timeout=15
             )
             report["search_status"] = rs.status_code
-            if rs.status_code == 200:
+            report["search_raw_preview"] = rs.text[:200]
+            if rs.status_code == 200 and rs.text.strip():
                 body = rs.json()
                 items = body if isinstance(body, list) else (body.get("content") or body.get("data") or [])
                 if items:
                     rne_id_test = (items[0].get("identifiantUnique") or
                                    items[0].get("id") or "")
                     report["search_sample"] = str(items[0])[:400]
-            else:
-                report["search_raw"] = rs.text[:300]
         except Exception as e:
             report["erreur_search"] = str(e)
 
