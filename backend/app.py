@@ -449,25 +449,26 @@ def debug_rne():
         "Accept": "application/json",
     }
 
-    # Étape 1 : trouver un vrai rne_id via l'API PUBLIQUE (sans token)
+    # Étape 1 : trouver un vrai rne_id via l'API PUBLIQUE (sans token, param correct)
     rne_id_test = request.args.get("rne_id", "").strip()
     if not rne_id_test:
         try:
             rs = _req.get(
                 "https://www.registre-entreprises.tn/api/rne-api/front-office/shortEntites",
-                params={"page": 0, "size": 5, "raisonSociale": "syndic résidence"},
+                params={"denominationLatin": "syndic", "size": 5},
                 headers={"Referer": "https://www.registre-entreprises.tn/",
-                         "Accept": "application/json"},
+                         "Accept": "application/json",
+                         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/124.0.0.0 Safari/537.36"},
                 timeout=15
             )
             report["search_status"] = rs.status_code
-            report["search_raw_preview"] = rs.text[:200]
+            report["search_raw_preview"] = rs.text[:300]
             if rs.status_code == 200 and rs.text.strip():
                 body = rs.json()
-                items = body if isinstance(body, list) else (body.get("content") or body.get("data") or [])
+                # La réponse est {"registres": [...], "nombreTotal": N}
+                items = body.get("registres") or (body if isinstance(body, list) else [])
                 if items:
-                    rne_id_test = (items[0].get("identifiantUnique") or
-                                   items[0].get("id") or "")
+                    rne_id_test = items[0].get("identifiantUnique", "")
                     report["search_sample"] = str(items[0])[:400]
         except Exception as e:
             report["erreur_search"] = str(e)
