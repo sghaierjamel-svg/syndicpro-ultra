@@ -92,6 +92,55 @@ def _deaccent(s: str) -> str:
     return unicodedata.normalize('NFKD', s).encode('ascii', 'ignore').decode('ascii')
 
 
+# Translittération arabe → latin (noms tunisiens courants)
+_AR_MAP = {
+    'ا':'a','أ':'a','إ':'i','آ':'a','ب':'b','ت':'t','ث':'th','ج':'j',
+    'ح':'h','خ':'kh','د':'d','ذ':'z','ر':'r','ز':'z','س':'s','ش':'sh',
+    'ص':'s','ض':'d','ط':'t','ظ':'z','ع':'','غ':'gh','ف':'f','ق':'k',
+    'ك':'k','ل':'l','م':'m','ن':'n','ه':'h','و':'ou','ي':'i','ى':'a',
+    'ة':'a','ّ':'','َ':'a','ِ':'i','ُ':'ou','ً':'','ٍ':'','ٌ':'',
+}
+
+def _ar_to_latin(text: str) -> str:
+    """
+    Translittération arabe → latin pour les noms tunisiens.
+    Ex: 'الاسعد الزيتوني' → 'El Assaad Zitouni'
+        'محمد علي الجبري' → 'Mohamed Ali Jebri'
+        'جمال الصغير'     → 'Jamal Saghir'
+    """
+    # Corrections de mots courants avant translittération
+    _FIXES = {
+        'بن': 'ben', 'بنت': 'bent', 'ابن': 'ibn',
+        'محمد': 'Mohamed', 'أحمد': 'Ahmed', 'علي': 'Ali',
+        'عمر': 'Omar', 'حسن': 'Hassen', 'حسين': 'Houcine',
+        'يوسف': 'Youssef', 'خالد': 'Khaled', 'سمير': 'Samir',
+        'كريم': 'Karim', 'نادر': 'Nader', 'هشام': 'Hichem',
+        'فاطمة': 'Fatma', 'منى': 'Mona', 'سارة': 'Sara',
+        'رضا': 'Ridha', 'نجيب': 'Nejib', 'توفيق': 'Taoufik',
+    }
+    result = []
+    for word in text.split():
+        if word in _FIXES:
+            result.append(_FIXES[word])
+            continue
+        # Garder "El" si article défini ال
+        prefix = ''
+        w = word
+        if w.startswith('ال'):
+            prefix = 'El '
+            w = w[2:]
+        latin = ''.join(_AR_MAP.get(c, '') for c in w)
+        latin = re.sub(r'[^\x00-\x7F]+', '', latin).strip()
+        # Ajouter 'a' entre deux consonnes consécutives
+        latin = re.sub(r'([bcdfghjklmnpqrstvwxz])([bcdfghjklmnpqrstvwxz])', r'\1a\2', latin)
+        if latin:
+            result.append((prefix + latin).strip().capitalize())
+    return ' '.join(result)
+
+def _is_arabic(s: str) -> bool:
+    return bool(s) and any('\u0600' <= c <= '\u06ff' for c in s)
+
+
 def short_name(name: str) -> str:
     """
     Retire les préfixes juridiques/génériques pour obtenir le nom utile.
@@ -439,9 +488,6 @@ def src_contact_crawler(name, city, short, context=""):
 # ─────────────────────────────────────────────────────────────────────────────
 #  RNE Borne API (Phase 1 + prépare la Phase 2)
 # ─────────────────────────────────────────────────────────────────────────────
-
-def _is_arabic(s: str) -> bool:
-    return bool(s) and any('\u0600' <= c <= '\u06ff' for c in s)
 
 
 def _rne_member(nom, qualite):
@@ -846,80 +892,91 @@ def scrape_all(name: str, city: str, rne_id: str = "", context: str = "") -> lis
 
 def _src_member_personal(nom: str, city: str, denom_latin: str, qualite: str = ""):
     """
-    Recherche intensive du contact d'un membre RNE (président, trésorier, SG...).
-    Lance 4 recherches en parallèle :
-      1. DDG   — nom + syndic + ville + contact
-      2. Bing  — nom + rôle + Tunisie téléphone
-      3. Google — nom + ville + email
-      4. Facebook — recherche personnes + pages
-    Gère les noms arabes (Google/DDG les indexent bien).
+    Recherche intensive du contact d'un membre RNE.
+    Si le nom est en arabe, on génère aussi la forme latine translittérée.
+    4 sources en parallèle : DDG, Bing, Google, Facebook (personnes + pages).
     """
     r  = {"phones": [], "emails": [], "websites": []}
     sp, se = set(), set()
 
-    role = qualite or "syndic"
+    # Forme latine : translittération si arabe, sinon nom tel quel
+    nom_latin = _ar_to_latin(nom) if _is_arabic(nom) else nom
+    # On cherche avec les deux formes pour maximiser les résultats
+    noms = list(dict.fromkeys(filter(None, [nom, nom_latin])))
 
     def _ddg():
         out = {"phones": [], "emails": [], "websites": []}
-        for q in [
-            f'"{nom}" "{denom_latin}" contact téléphone email',
-            f'"{nom}" {city} syndic email téléphone',
-            f'"{nom}" syndic tunisie email contact',
-        ]:
-            d = extract_data(fetch(f"https://lite.duckduckgo.com/lite/?q={quote(q)}"))
-            for p in d.get("phones", []):
-                if p not in out["phones"]: out["phones"].append(p)
-            for e in d.get("emails", []):
-                if e not in out["emails"]: out["emails"].append(e)
-            if out["phones"] and out["emails"]:
-                break
+        for n in noms:
+            for q in [
+                f'"{n}" "{denom_latin}" contact téléphone email',
+                f'"{n}" {city} syndic email téléphone',
+                f'{n} {city} syndic tunisie contact',
+            ]:
+                d = extract_data(fetch(f"https://lite.duckduckgo.com/lite/?q={quote(q)}"))
+                for p in d.get("phones", []):
+                    if p not in out["phones"]: out["phones"].append(p)
+                for e in d.get("emails", []):
+                    if e not in out["emails"]: out["emails"].append(e)
+                if out["phones"] or out["emails"]:
+                    return out
         return out
 
     def _bing():
         out = {"phones": [], "emails": [], "websites": []}
-        for q in [
-            f'"{nom}" {role} {city} téléphone email',
-            f'"{nom}" syndic tunisie contact',
-        ]:
-            d = extract_data(fetch(
-                f"https://www.bing.com/search?q={quote(q)}&cc=TN&setlang=fr",
-                referer="https://www.bing.com/"
-            ))
-            for p in d.get("phones", []):
-                if p not in out["phones"]: out["phones"].append(p)
-            for e in d.get("emails", []):
-                if e not in out["emails"]: out["emails"].append(e)
-            if out["phones"] and out["emails"]:
-                break
+        for n in noms:
+            for q in [
+                f'"{n}" {city} téléphone email syndic',
+                f'{n} syndic {denom_latin} contact',
+            ]:
+                d = extract_data(fetch(
+                    f"https://www.bing.com/search?q={quote(q)}&cc=TN&setlang=fr",
+                    referer="https://www.bing.com/"
+                ))
+                for p in d.get("phones", []):
+                    if p not in out["phones"]: out["phones"].append(p)
+                for e in d.get("emails", []):
+                    if e not in out["emails"]: out["emails"].append(e)
+                if out["phones"] or out["emails"]:
+                    return out
         return out
 
     def _google():
         out = {"phones": [], "emails": [], "websites": []}
-        for q in [
-            f'"{nom}" {city} email OR "gmail" OR "yahoo" téléphone',
-            f'"{nom}" "{denom_latin}"',
-        ]:
-            url = f"https://www.google.com/search?q={quote(q)}&hl=fr&gl=tn"
-            d = extract_data(fetch(url, referer="https://www.google.com/"))
-            for p in d.get("phones", []):
-                if p not in out["phones"]: out["phones"].append(p)
-            for e in d.get("emails", []):
-                if e not in out["emails"]: out["emails"].append(e)
-            if out["phones"] and out["emails"]:
-                break
+        for n in noms:
+            for q in [
+                f'"{n}" {city} email téléphone syndic',
+                f'"{n}" "{denom_latin}" contact',
+            ]:
+                url = f"https://www.google.com/search?q={quote(q)}&hl=fr&gl=tn"
+                d = extract_data(fetch(url, referer="https://www.google.com/"))
+                for p in d.get("phones", []):
+                    if p not in out["phones"]: out["phones"].append(p)
+                for e in d.get("emails", []):
+                    if e not in out["emails"]: out["emails"].append(e)
+                if out["phones"] or out["emails"]:
+                    return out
         return out
 
     def _facebook():
         out = {"phones": [], "emails": [], "websites": []}
-        for url in [
-            f"https://mbasic.facebook.com/search/people/?q={quote(nom)}",
-            f"https://mbasic.facebook.com/search/pages/?q={quote(nom + ' ' + city)}",
-        ]:
+        urls = []
+        for n in noms:
+            urls += [
+                f"https://mbasic.facebook.com/search/people/?q={quote(n)}",
+                f"https://mbasic.facebook.com/search/people/?q={quote(n + ' ' + city)}",
+            ]
+        # Page Facebook du syndic lui-même
+        urls.append(
+            f"https://mbasic.facebook.com/search/pages/?q={quote(denom_latin + ' ' + city)}"
+        )
+        for url in urls:
             d = extract_data(fetch(url, referer="https://mbasic.facebook.com/", timeout=7))
             for p in d.get("phones", []):
                 if p not in out["phones"]: out["phones"].append(p)
             for e in d.get("emails", []):
                 if e not in out["emails"]: out["emails"].append(e)
+            if out["phones"] or out["emails"]:
+                break
         return out
 
     # Lancer les 4 sources en parallèle
