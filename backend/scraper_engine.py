@@ -389,53 +389,56 @@ def _rne_member(nom, qualite):
     return {"nom": nom, "qualite": qualite} if nom else None
 
 
-def _rne_score(candidate: dict, name: str, city: str) -> float:
+def _rne_core(text: str) -> str:
+    """Retire les préfixes juridiques d'une dénomination RNE."""
+    t = text.upper().strip()
+    for pfx in sorted(SHORT_NAME_PREFIXES, key=len, reverse=True):
+        pfx_up = pfx.upper()
+        if t.startswith(pfx_up + ' ') or t == pfx_up:
+            t = t[len(pfx_up):].strip(' -–')
+            break
+    for art in ['DE LA ', "DE L'", 'DES ', 'DE ', 'LA ', 'LE ', 'LES ', 'AL ', 'EL ']:
+        if t.startswith(art):
+            t = t[len(art):]
+            break
+    return t
+
+
+def _rne_score(denom: str, name: str, city: str) -> float:
     """
-    Score how well a RNE entry matches our query (name + city).
-    Higher = better match. Used to pick the right entry when multiple results exist.
+    Score une dénomination RNE contre notre requête (nom + ville).
+    On ne se fie QU'À la denominationLatin — champ garanti présent.
     """
-    denom = (candidate.get("denominationLatin") or "").upper()
-    gov   = (candidate.get("gouvernorat") or candidate.get("ville") or
-             candidate.get("region") or "").upper()
-    n  = name.upper()
+    d  = denom.upper()
     cy = city.upper()
 
-    # Remove all common prefixes to get the core name for comparison
-    core_n = n
-    for pfx in SHORT_NAME_PREFIXES:
-        pfx_up = pfx.upper()
-        if core_n.startswith(pfx_up + ' ') or core_n == pfx_up:
-            core_n = core_n[len(pfx_up):].strip(' -–')
-            break
-
-    core_d = denom
-    for pfx in SHORT_NAME_PREFIXES:
-        pfx_up = pfx.upper()
-        if core_d.startswith(pfx_up + ' ') or core_d == pfx_up:
-            core_d = core_d[len(pfx_up):].strip(' -–')
-            break
+    # Noyau sans préfixes
+    core_d = _rne_core(d)
+    core_n = _rne_core(name)
 
     score = 0.0
 
-    # Exact core name match (highest priority)
-    if core_n and core_n in core_d:
-        score += 80
-    elif core_n and core_d in core_n:
-        score += 60
+    # ── Correspondance ville dans la dénomination (signal le plus fiable) ──
+    # Ex: "RESIDENCE MEZIANA SOUKRA" contient "SOUKRA" → +100
+    if cy and cy in d:
+        score += 100
 
-    # Word overlap between core names
-    n_words = set(core_n.split()) - {'DE', 'LA', 'LE', 'LES', 'DES', 'AL', 'EL'}
-    d_words = set(core_d.split()) - {'DE', 'LA', 'LE', 'LES', 'DES', 'AL', 'EL'}
+    # ── Correspondance exacte du noyau ──────────────────────────────────────
+    if core_n and core_d == core_n:
+        score += 80
+    elif core_n and core_n in core_d:
+        score += 60
+    elif core_n and core_d in core_n:
+        score += 40
+
+    # ── Overlap mot par mot ──────────────────────────────────────────────────
+    STOP = {'DE', 'LA', 'LE', 'LES', 'DES', 'AL', 'EL', 'ET', 'DU', 'AU'}
+    n_words = set(core_n.split()) - STOP
+    d_words = set(core_d.split()) - STOP
     if n_words and d_words:
         overlap = n_words & d_words
-        score += len(overlap) * 15
-
-    # City match in gouvernorat/region field
-    if cy and cy in gov:
-        score += 40
-    # City appears in denomination
-    if cy and cy in denom:
-        score += 20
+        # Pénaliser si candidat a beaucoup plus de mots (trop différent)
+        score += len(overlap) * 10 - max(0, len(d_words) - len(n_words) - 2) * 5
 
     return score
 
@@ -463,23 +466,38 @@ def src_rne_borne(name, city, short):
             pass
         return None
 
-    # ── 1. Rechercher dans shortEntites — essayer plusieurs termes ────────────
-    # Essayer d'abord le short name, puis le nom complet, puis juste les mots-clés
-    registres = []
-    for search_term in [short, name]:
-        data = _api_get(RNE_BORNE_SEARCH, {"denominationLatin": search_term, "size": 20})
-        if data:
-            r = data.get("registres", [])
-            if r:
-                registres = r
-                break
+    # ── 1. Collecter des candidats depuis plusieurs requêtes (du + spécifique au - spécifique)
+    all_registres = {}   # id_unique → entry (déduplication)
 
-    if not registres:
+    search_terms = [
+        f"{short} {city}",   # "Meziana Soukra" — le plus précis
+        f"{name} {city}",    # nom complet + ville
+        short,               # "Meziana"
+        name,                # nom complet
+    ]
+    for term in search_terms:
+        data = _api_get(RNE_BORNE_SEARCH, {"denominationLatin": term, "size": 20})
+        if data:
+            for entry in data.get("registres", []):
+                uid = entry.get("identifiantUnique", "")
+                if uid and uid not in all_registres:
+                    all_registres[uid] = entry
+        # Si la requête la plus spécifique donne un résultat unique → s'arrêter là
+        if term == f"{short} {city}" and len(all_registres) == 1:
+            break
+
+    if not all_registres:
         return result, "rne_borne"
 
-    # ── 2. Choisir le meilleur résultat (scoring nom + ville) ─────────────────
-    scored = [(entry, _rne_score(entry, name, city)) for entry in registres]
+    # ── 2. Choisir le meilleur résultat par scoring sur denominationLatin ──────
+    scored = [
+        (entry, _rne_score(entry.get("denominationLatin", ""), name, city))
+        for entry in all_registres.values()
+    ]
     scored.sort(key=lambda x: x[1], reverse=True)
+
+    # Si deux candidats ont des scores très proches ET aucun ne contient la ville,
+    # on log un avertissement (amélioration future possible)
     best = scored[0][0]
 
     id_unique    = best.get("identifiantUnique", "")
@@ -487,22 +505,37 @@ def src_rne_borne(name, city, short):
     result["rne_id_found"] = id_unique
     result["denom_latin"]  = denom_latin
 
-    # ── 3. Trouver l'entrée borne ─────────────────────────────────────────────
-    bornes_data = _api_get(RNE_BORNE_ENTRIES, {"denominationLatin": denom_latin, "size": 20})
-    if not bornes_data:
+    # ── 3. Trouver l'entrée borne correspondante ───────────────────────────────
+    # Chercher d'abord avec la dénomination exacte choisie
+    all_bornes = {}   # id → borne entry
+
+    for term in [denom_latin, f"{short} {city}", short]:
+        bornes_data = _api_get(RNE_BORNE_ENTRIES, {"denominationLatin": term, "size": 20})
+        if bornes_data:
+            for b in bornes_data.get("bornes", []):
+                bid = b.get("id")
+                if bid and bid not in all_bornes:
+                    all_bornes[bid] = b
+
+    if not all_bornes:
         return result, "rne_borne"
 
-    bornes = bornes_data.get("bornes", [])
-    # Priorité : correspondance exacte sur identifiantUnique → sinon meilleur score
+    # Priorité absolue : correspondance exacte sur identifiantUnique
     borne_id = next(
-        (b["id"] for b in bornes if b.get("identifiantUnique") == id_unique),
+        (b["id"] for b in all_bornes.values() if b.get("identifiantUnique") == id_unique),
         None
     )
-    if not borne_id and bornes:
-        # Si pas de correspondance exacte, scorer aussi les bornes
-        scored_b = [(b, _rne_score(b, name, city)) for b in bornes]
+    # Sinon : scorer les bornes sur leur dénomination
+    if not borne_id:
+        scored_b = [
+            (b, _rne_score(
+                b.get("denominationLatin", b.get("denomination", "")), name, city
+            ))
+            for b in all_bornes.values()
+        ]
         scored_b.sort(key=lambda x: x[1], reverse=True)
         borne_id = scored_b[0][0]["id"]
+
     if not borne_id:
         return result, "rne_borne"
 
