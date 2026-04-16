@@ -16,6 +16,10 @@ import re
 import requests
 import random
 import json
+import time
+import threading
+import base64
+import os
 from urllib.parse import quote, urlparse, unquote
 from concurrent.futures import ThreadPoolExecutor, wait, ALL_COMPLETED
 from bs4 import BeautifulSoup
@@ -68,7 +72,13 @@ SHORT_NAME_PREFIXES = [
 
 RNE_BORNE_SEARCH  = "https://www.registre-entreprises.tn/api/rne-api/front-office/shortEntites"
 RNE_BORNE_ENTRIES = "https://www.registre-entreprises.tn/api/rne-borne-api/borne-entries"
+RNE_ENTITES       = "https://www.registre-entreprises.tn/api/rne-api/front-office/entites"
+RNE_AUTH_URL      = "https://www.registre-entreprises.tn/api/rne-auth-api/oauth/token"
 RNE_REFERER       = "https://www.registre-entreprises.tn/"
+
+# ── Token RNE (chargé depuis l'env, rafraîchi automatiquement) ────────────────
+_rne_token_lock  = threading.Lock()
+_rne_token_cache = {"token": None, "expires_at": 0}
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -527,6 +537,106 @@ def get_rne_candidates(name: str, city: str) -> list:
     return result
 
 
+def _get_rne_token() -> str:
+    """
+    Retourne un Bearer token valide pour l'API RNE.
+    - Utilise RNE_TOKEN (env) directement si défini ET valide.
+    - Sinon se connecte avec RNE_USERNAME / RNE_PASSWORD (OAuth2 password grant).
+    - Cache le token en mémoire pour éviter de se reconnecter à chaque appel.
+    """
+    global _rne_token_cache
+
+    with _rne_token_lock:
+        now = time.time()
+        # Token en cache encore valide (marge de 60s)
+        if _rne_token_cache["token"] and _rne_token_cache["expires_at"] > now + 60:
+            return _rne_token_cache["token"]
+
+        # 1. Token statique depuis l'env (pratique pour le développement)
+        static_token = os.environ.get("RNE_TOKEN", "").strip()
+        if static_token:
+            # On suppose qu'il est valide 8h (opaque token UUID RNE)
+            _rne_token_cache = {"token": static_token, "expires_at": now + 8 * 3600}
+            return static_token
+
+        # 2. Connexion automatique via credentials
+        username = os.environ.get("RNE_USERNAME", "").strip()
+        password = os.environ.get("RNE_PASSWORD", "").strip()
+        if not username or not password:
+            return ""
+
+        try:
+            basic = base64.b64encode(b"recgmg:pin").decode()
+            r = requests.post(
+                RNE_AUTH_URL,
+                data={
+                    "grant_type": "password",
+                    "username":   username,
+                    "password":   password,
+                },
+                headers={
+                    "Authorization": f"Basic {basic}",
+                    "Content-Type":  "application/x-www-form-urlencoded",
+                },
+                timeout=10
+            )
+            if r.status_code == 200:
+                d = r.json()
+                token   = d.get("access_token", "")
+                expires = d.get("expires_in", 3600)
+                _rne_token_cache = {"token": token, "expires_at": now + expires}
+                logging.info("[RNE] Token rafraîchi avec succès")
+                return token
+        except Exception as e:
+            logging.warning(f"[RNE] Échec login: {e}")
+        return ""
+
+
+def src_rne_entite(rne_id: str):
+    """
+    API authentifiée registre-entreprises.tn — GET /front-office/entites/{id}
+    Retourne l'email officiel de la société (adresseEmailSociete).
+    Requiert RNE_TOKEN ou RNE_USERNAME+RNE_PASSWORD dans les variables d'env.
+    """
+    result = {"phones": [], "emails": [], "websites": []}
+    if not rne_id:
+        return result, "rne_entite"
+
+    token = _get_rne_token()
+    if not token:
+        return result, "rne_entite"
+
+    try:
+        r = requests.get(
+            f"{RNE_ENTITES}/{rne_id}",
+            headers={
+                "Authorization": f"Bearer {token}",
+                "Accept":        "application/json",
+                "Referer":       RNE_REFERER,
+                "User-Agent":    random.choice(USER_AGENTS),
+            },
+            timeout=8
+        )
+        if r.status_code == 401:
+            # Token expiré — forcer le refresh au prochain appel
+            with _rne_token_lock:
+                _rne_token_cache["expires_at"] = 0
+            logging.warning("[RNE] Token expiré, sera rafraîchi au prochain appel")
+            return result, "rne_entite"
+
+        if r.status_code == 200 and r.text:
+            d = r.json()
+            email = (d.get("adresseEmailSociete") or d.get("email") or "").strip().lower()
+            if email and "@" in email:
+                result["emails"].append(email)
+                logging.info(f"[RNE entite] {rne_id} → email: {email}")
+
+    except Exception as e:
+        logging.warning(f"[RNE entite] {rne_id}: {e}")
+
+    return result, "rne_entite"
+
+
 def src_rne_borne(name, city, short, rne_id=""):
     """
     API publique registre-entreprises.tn.
@@ -653,13 +763,14 @@ def scrape_all(name: str, city: str, rne_id: str = "", context: str = "") -> lis
         "tayara":       lambda: src_tayara(name, city, sn, context),
         "rne_old":      lambda: src_rne_old(name, city, rne_id),
         "rne_borne":    lambda: src_rne_borne(name, city, sn, rne_id),
+        "rne_entite":   lambda: src_rne_entite(rne_id),
         "crawler":      lambda: src_contact_crawler(name, city, sn, context),
     }
 
     results      = []
     rne_borne_r  = None
 
-    with ThreadPoolExecutor(max_workers=14) as ex:
+    with ThreadPoolExecutor(max_workers=15) as ex:
         fmap = {ex.submit(fn): key for key, fn in phase1.items()}
         done, _ = wait(fmap.keys(), timeout=20, return_when=ALL_COMPLETED)
         for f in _:
