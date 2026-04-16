@@ -409,6 +409,53 @@ def health():
     return jsonify({"status": "ok", "version": "4.0"})
 
 
+# ── Diagnostic RNE ────────────────────────────────────────────────────────────
+
+@app.route("/debug/rne")
+def debug_rne():
+    """Teste la connexion RNE et retourne un rapport détaillé."""
+    import os
+    from scraper_engine import _get_rne_token, src_rne_entite
+
+    rne_username = os.environ.get("RNE_USERNAME", "")
+    rne_password = os.environ.get("RNE_PASSWORD", "")
+    rne_token_env = os.environ.get("RNE_TOKEN", "")
+
+    report = {
+        "env": {
+            "RNE_USERNAME":  rne_username[:4] + "***" if rne_username else "(non défini)",
+            "RNE_PASSWORD":  "***" if rne_password else "(non défini)",
+            "RNE_TOKEN":     rne_token_env[:8] + "…" if rne_token_env else "(non défini)",
+        },
+        "token_obtenu": False,
+        "token_preview": "",
+        "test_email": "",
+        "test_rne_id": "1735882881",   # ID RNE de test (syndic connu)
+        "erreur": "",
+    }
+
+    try:
+        token = _get_rne_token()
+        if token:
+            report["token_obtenu"] = True
+            report["token_preview"] = token[:8] + "…"
+        else:
+            report["erreur"] = "Token vide — vérifiez RNE_USERNAME et RNE_PASSWORD"
+            return jsonify(report)
+    except Exception as e:
+        report["erreur"] = f"Erreur lors de _get_rne_token() : {e}"
+        return jsonify(report)
+
+    try:
+        data, _ = src_rne_entite(report["test_rne_id"])
+        emails = data.get("emails", [])
+        report["test_email"] = emails[0] if emails else "(aucun email retourné)"
+    except Exception as e:
+        report["erreur"] = f"Erreur lors de src_rne_entite() : {e}"
+
+    return jsonify(report)
+
+
 # ── Pages frontend ─────────────────────────────────────────────────────────────
 
 @app.route("/")
