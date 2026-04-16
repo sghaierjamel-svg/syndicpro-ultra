@@ -75,25 +75,32 @@ RNE_REFERER       = "https://www.registre-entreprises.tn/"
 #  Utilitaires communs
 # ─────────────────────────────────────────────────────────────────────────────
 
+def _deaccent(s: str) -> str:
+    """Supprime les accents : résidence → residence, Méziàna → Meziana."""
+    import unicodedata
+    return unicodedata.normalize('NFKD', s).encode('ascii', 'ignore').decode('ascii')
+
+
 def short_name(name: str) -> str:
     """
     Retire les préfixes juridiques/génériques pour obtenir le nom utile.
     Ex: 'SYNDIC RESIDENTIEL LES VIOLETTES' → 'Les Violettes'
+        'résidence meziana'                → 'Meziana'
         'SARL TRANSPORT TAREK'             → 'Transport Tarek'
+    Gère les accents : 'RÉSIDENCE' matche le préfixe 'RESIDENCE'.
     """
-    n = name.upper().strip()
-    # Retirer préfixes de la liste (ordre important : du plus long au plus court)
+    # Normaliser sans accents pour la comparaison avec les préfixes ASCII
+    n = _deaccent(name).upper().strip()
     for prefix in sorted(SHORT_NAME_PREFIXES, key=len, reverse=True):
-        pfx = prefix.upper().strip()
+        pfx = _deaccent(prefix).upper().strip()
         if n.startswith(pfx + ' ') or n == pfx:
             n = n[len(pfx):].strip(' -–')
             break
-    # Retirer articles résiduels en début
     for art in ['DE LA ', "DE L'", 'DES ', 'DE ', 'LA ', 'LE ', 'LES ', 'AL ', 'EL ']:
-        if n.upper().startswith(art):
+        if n.startswith(art):
             n = n[len(art):]
             break
-    return n.title() if n else name.title()
+    return n.title() if n else _deaccent(name).title()
 
 
 def _headers(referer=None):
@@ -466,76 +473,60 @@ def src_rne_borne(name, city, short):
             pass
         return None
 
-    # ── 1. Collecter des candidats depuis plusieurs requêtes (du + spécifique au - spécifique)
-    all_registres = {}   # id_unique → entry (déduplication)
+    # ── 1. Collecter des candidats dans shortEntites ───────────────────────────
+    # Du plus précis (short + city) au moins précis (short seul)
+    # short est déjà sans accents et sans préfixe grâce à short_name()
+    all_registres = {}   # identifiantUnique → entry
 
-    search_terms = [
-        f"{short} {city}",   # "Meziana Soukra" — le plus précis
-        f"{name} {city}",    # nom complet + ville
-        short,               # "Meziana"
-        name,                # nom complet
-    ]
-    for term in search_terms:
+    for term in [f"{short} {city}", short, name]:
         data = _api_get(RNE_BORNE_SEARCH, {"denominationLatin": term, "size": 20})
         if data:
             for entry in data.get("registres", []):
                 uid = entry.get("identifiantUnique", "")
                 if uid and uid not in all_registres:
                     all_registres[uid] = entry
-        # Si la requête la plus spécifique donne un résultat unique → s'arrêter là
-        if term == f"{short} {city}" and len(all_registres) == 1:
-            break
+        # Déjà trouvé avec le terme le plus précis : inutile d'aller plus loin
+        if all_registres and term == f"{short} {city}":
+            city_matches = [
+                e for e in all_registres.values()
+                if city.upper() in (e.get("denominationLatin") or "").upper()
+            ]
+            if city_matches:
+                # On a une correspondance claire ville+nom → stop
+                all_registres = {e["identifiantUnique"]: e for e in city_matches}
+                break
 
     if not all_registres:
         return result, "rne_borne"
 
-    # ── 2. Choisir le meilleur résultat par scoring sur denominationLatin ──────
-    scored = [
-        (entry, _rne_score(entry.get("denominationLatin", ""), name, city))
-        for entry in all_registres.values()
-    ]
-    scored.sort(key=lambda x: x[1], reverse=True)
-
-    # Si deux candidats ont des scores très proches ET aucun ne contient la ville,
-    # on log un avertissement (amélioration future possible)
-    best = scored[0][0]
-
-    id_unique    = best.get("identifiantUnique", "")
-    denom_latin  = best.get("denominationLatin", short)
+    # ── 2. Choisir le meilleur candidat par scoring ────────────────────────────
+    scored = sorted(
+        all_registres.values(),
+        key=lambda e: _rne_score(e.get("denominationLatin", ""), name, city),
+        reverse=True
+    )
+    best        = scored[0]
+    id_unique   = best.get("identifiantUnique", "")
+    denom_latin = best.get("denominationLatin", short)
     result["rne_id_found"] = id_unique
     result["denom_latin"]  = denom_latin
 
-    # ── 3. Trouver l'entrée borne correspondante ───────────────────────────────
-    # Chercher d'abord avec la dénomination exacte choisie
-    all_bornes = {}   # id → borne entry
-
-    for term in [denom_latin, f"{short} {city}", short]:
-        bornes_data = _api_get(RNE_BORNE_ENTRIES, {"denominationLatin": term, "size": 20})
-        if bornes_data:
-            for b in bornes_data.get("bornes", []):
-                bid = b.get("id")
-                if bid and bid not in all_bornes:
-                    all_bornes[bid] = b
-
-    if not all_bornes:
+    # ── 3. Trouver l'entrée borne avec la dénomination exacte ──────────────────
+    # On cherche UNIQUEMENT avec denom_latin (la dénomination spécifique trouvée)
+    # → évite de mélanger des bornes d'autres résidences
+    bornes_data = _api_get(RNE_BORNE_ENTRIES, {"denominationLatin": denom_latin, "size": 10})
+    if not bornes_data:
+        # Fallback : essayer avec le short name seul
+        bornes_data = _api_get(RNE_BORNE_ENTRIES, {"denominationLatin": short, "size": 10})
+    if not bornes_data:
         return result, "rne_borne"
 
-    # Priorité absolue : correspondance exacte sur identifiantUnique
+    bornes   = bornes_data.get("bornes", [])
+    # Priorité : correspondance exacte identifiantUnique → sinon premier résultat
     borne_id = next(
-        (b["id"] for b in all_bornes.values() if b.get("identifiantUnique") == id_unique),
-        None
+        (b["id"] for b in bornes if b.get("identifiantUnique") == id_unique),
+        bornes[0]["id"] if bornes else None
     )
-    # Sinon : scorer les bornes sur leur dénomination
-    if not borne_id:
-        scored_b = [
-            (b, _rne_score(
-                b.get("denominationLatin", b.get("denomination", "")), name, city
-            ))
-            for b in all_bornes.values()
-        ]
-        scored_b.sort(key=lambda x: x[1], reverse=True)
-        borne_id = scored_b[0][0]["id"]
-
     if not borne_id:
         return result, "rne_borne"
 
