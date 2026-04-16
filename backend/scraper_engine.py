@@ -808,23 +808,28 @@ def scrape_all(name: str, city: str, rne_id: str = "", context: str = "") -> lis
         except Exception as e:
             logging.warning(f"[Phase 1.5] rne_entite échoué : {e}")
 
-    # ── Phase 2 : recherche personnelle des membres (uniquement si RNE trouvé) ─
+    # ── Phase 2 : recherche personnelle de TOUS les membres RNE ─────────────────
+    # Président, Secrétaire Général, Trésorier, Responsable, Représentant légal
+    # Chaque membre est cherché en parallèle sur DDG + Bing + Google + Facebook
     if rne_borne_r and rne_borne_r.get("members"):
         members     = rne_borne_r["members"]
         denom_latin = rne_borne_r.get("denom_latin", sn)
 
         phase2_tasks = {}
-        for i, member in enumerate(members[:3]):   # max 3 membres
+        for i, member in enumerate(members[:6]):   # tous les membres, max 6
             nom = member.get("nom", "")
-            if not nom or len(nom) < 4:
+            if not nom or len(nom) < 3:
                 continue
-            key = f"member_{i}"
-            phase2_tasks[key] = lambda n=nom: _src_member_personal(n, city, denom_latin)
+            qualite = member.get("qualite", "")
+            key = f"member_{i}_{qualite}"
+            phase2_tasks[key] = lambda n=nom, q=qualite: _src_member_personal(
+                n, city, denom_latin, q
+            )
 
         if phase2_tasks:
             with ThreadPoolExecutor(max_workers=len(phase2_tasks)) as ex2:
                 fmap2 = {ex2.submit(fn): key for key, fn in phase2_tasks.items()}
-                done2, _ = wait(fmap2.keys(), timeout=6, return_when=ALL_COMPLETED)
+                done2, _ = wait(fmap2.keys(), timeout=15, return_when=ALL_COMPLETED)
                 for f in _:
                     f.cancel()
                 for future in done2:
@@ -839,39 +844,99 @@ def scrape_all(name: str, city: str, rne_id: str = "", context: str = "") -> lis
     return results
 
 
-def _src_member_personal(nom: str, city: str, denom_latin: str):
+def _src_member_personal(nom: str, city: str, denom_latin: str, qualite: str = ""):
     """
-    Recherche intensive du contact personnel d'un membre :
-    email perso (@gmail, @yahoo, @hotmail...), téléphone.
+    Recherche intensive du contact d'un membre RNE (président, trésorier, SG...).
+    Lance 4 recherches en parallèle :
+      1. DDG   — nom + syndic + ville + contact
+      2. Bing  — nom + rôle + Tunisie téléphone
+      3. Google — nom + ville + email
+      4. Facebook — recherche personnes + pages
+    Gère les noms arabes (Google/DDG les indexent bien).
     """
     r  = {"phones": [], "emails": [], "websites": []}
     sp, se = set(), set()
 
-    queries = [
-        # DDG — email personnel
-        f'"{nom}" email gmail yahoo',
-        f'"{nom}" "{denom_latin}" email',
-        f'"{nom}" {city} email contact',
-        # Bing — souvent meilleur pour profils personnels
-        f'"{nom}" email téléphone tunisie',
-    ]
+    role = qualite or "syndic"
 
-    engines = [
-        lambda q: fetch(f"https://lite.duckduckgo.com/lite/?q={quote(q)}"),
-        lambda q: fetch(f"https://lite.duckduckgo.com/lite/?q={quote(q)}"),
-        lambda q: fetch(f"https://lite.duckduckgo.com/lite/?q={quote(q)}"),
-        lambda q: fetch(f"https://www.bing.com/search?q={quote(q)}&cc=TN",
-                        referer="https://www.bing.com/"),
-    ]
+    def _ddg():
+        out = {"phones": [], "emails": [], "websites": []}
+        for q in [
+            f'"{nom}" "{denom_latin}" contact téléphone email',
+            f'"{nom}" {city} syndic email téléphone',
+            f'"{nom}" syndic tunisie email contact',
+        ]:
+            d = extract_data(fetch(f"https://lite.duckduckgo.com/lite/?q={quote(q)}"))
+            for p in d.get("phones", []):
+                if p not in out["phones"]: out["phones"].append(p)
+            for e in d.get("emails", []):
+                if e not in out["emails"]: out["emails"].append(e)
+            if out["phones"] and out["emails"]:
+                break
+        return out
 
-    for q, engine in zip(queries, engines):
-        _merge(r, extract_data(engine(q)), sp, se)
-        if r["phones"] or r["emails"]:
-            break
+    def _bing():
+        out = {"phones": [], "emails": [], "websites": []}
+        for q in [
+            f'"{nom}" {role} {city} téléphone email',
+            f'"{nom}" syndic tunisie contact',
+        ]:
+            d = extract_data(fetch(
+                f"https://www.bing.com/search?q={quote(q)}&cc=TN&setlang=fr",
+                referer="https://www.bing.com/"
+            ))
+            for p in d.get("phones", []):
+                if p not in out["phones"]: out["phones"].append(p)
+            for e in d.get("emails", []):
+                if e not in out["emails"]: out["emails"].append(e)
+            if out["phones"] and out["emails"]:
+                break
+        return out
 
-    # Facebook people search
-    fb = fetch(f"https://mbasic.facebook.com/search/people/?q={quote(nom)}",
-               referer="https://mbasic.facebook.com/", timeout=7)
-    _merge(r, extract_data(fb), sp, se)
+    def _google():
+        out = {"phones": [], "emails": [], "websites": []}
+        for q in [
+            f'"{nom}" {city} email OR "gmail" OR "yahoo" téléphone',
+            f'"{nom}" "{denom_latin}"',
+        ]:
+            url = f"https://www.google.com/search?q={quote(q)}&hl=fr&gl=tn"
+            d = extract_data(fetch(url, referer="https://www.google.com/"))
+            for p in d.get("phones", []):
+                if p not in out["phones"]: out["phones"].append(p)
+            for e in d.get("emails", []):
+                if e not in out["emails"]: out["emails"].append(e)
+            if out["phones"] and out["emails"]:
+                break
+        return out
 
-    return r, f"member_contact"
+    def _facebook():
+        out = {"phones": [], "emails": [], "websites": []}
+        for url in [
+            f"https://mbasic.facebook.com/search/people/?q={quote(nom)}",
+            f"https://mbasic.facebook.com/search/pages/?q={quote(nom + ' ' + city)}",
+        ]:
+            d = extract_data(fetch(url, referer="https://mbasic.facebook.com/", timeout=7))
+            for p in d.get("phones", []):
+                if p not in out["phones"]: out["phones"].append(p)
+            for e in d.get("emails", []):
+                if e not in out["emails"]: out["emails"].append(e)
+        return out
+
+    # Lancer les 4 sources en parallèle
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        futures = {
+            pool.submit(_ddg):      "ddg",
+            pool.submit(_bing):     "bing",
+            pool.submit(_google):   "google",
+            pool.submit(_facebook): "facebook",
+        }
+        done_m, _ = wait(futures.keys(), timeout=10, return_when=ALL_COMPLETED)
+        for f in _:
+            f.cancel()
+        for fut in done_m:
+            try:
+                _merge(r, fut.result(timeout=1), sp, se)
+            except Exception:
+                pass
+
+    return r, "member_contact"
