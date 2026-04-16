@@ -505,6 +505,52 @@ def debug_rne():
     return jsonify(report)
 
 
+# ── Test scrape complet (debug) ───────────────────────────────────────────────
+
+@app.route("/debug/scrape")
+def debug_scrape():
+    """
+    Lance scrape_all + compute_conformity sur un syndic de test et retourne
+    le détail de chaque source (ce qu'elle a trouvé ou non).
+    Paramètres : ?name=...&city=...&rne_id=... (rne_id optionnel)
+    """
+    name   = (request.args.get("name")   or "SYNDIC DES COPROPRIETAIRES DE LA RESIDENCE EL YASSAMINE").strip()
+    city   = (request.args.get("city")   or "Sousse").strip()
+    rne_id = (request.args.get("rne_id") or "1977113T").strip()
+
+    from scraper_engine import scrape_all
+    from scoring_engine import compute_conformity
+
+    try:
+        raw    = scrape_all(name, city, rne_id=rne_id, context="syndic")
+        result = compute_conformity(raw)
+
+        detail = []
+        for r in raw:
+            detail.append({
+                "source":  r.get("source", "?"),
+                "phones":  r.get("phones", []),
+                "emails":  r.get("emails", []),
+                "rne_id":  r.get("rne_id_found", ""),
+                "president": r.get("president", ""),
+            })
+
+        return jsonify({
+            "input":        {"name": name, "city": city, "rne_id": rne_id},
+            "sources_brut": detail,
+            "resultat":     {
+                "phone":       result.get("phone"),
+                "email":       result.get("email"),
+                "global_conf": result.get("global_conf"),
+                "sources_hit": result.get("sources_hit"),
+                "found":       result.get("found"),
+            }
+        })
+    except Exception as e:
+        import traceback
+        return jsonify({"erreur": str(e), "trace": traceback.format_exc()}), 500
+
+
 # ── Pages frontend ─────────────────────────────────────────────────────────────
 
 @app.route("/")
