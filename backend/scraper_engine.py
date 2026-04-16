@@ -117,7 +117,7 @@ def _headers(referer=None):
     return h
 
 
-def fetch(url: str, timeout=8, retries=1, referer=None) -> str:
+def fetch(url: str, timeout=6, retries=0, referer=None) -> str:
     for attempt in range(retries + 1):
         try:
             r = requests.get(url, headers=_headers(referer),
@@ -577,38 +577,8 @@ def src_rne_borne(name, city, short, rne_id=""):
     result["members"]   = unique_members
     result["president"] = unique_members[0]["nom"] if unique_members else ""
     result["address"]   = (det.get("adresse") or "").strip()
-
-    # ── Recherche contacts des membres ────────────────────────────────────────
-    sp, se = set(), set()
-    for member in unique_members[:3]:
-        nom    = member["nom"]
-        nom_ar = member.get("nom_ar", "")
-        if not nom or len(nom) < 4:
-            continue
-        for search_nom in [n for n in [nom, nom_ar] if n and len(n) >= 4]:
-            for q in [
-                f'"{search_nom}" {city} email téléphone',
-                f'"{search_nom}" "{denom_latin}"',
-                f'"{search_nom}" {city} contact',
-                f'"{search_nom}" email',
-            ]:
-                d = extract_data(fetch(f"https://lite.duckduckgo.com/lite/?q={quote(q)}", timeout=6))
-                _merge(result, d, sp, se)
-                if result["phones"] or result["emails"]:
-                    break
-            if result["phones"] or result["emails"]:
-                break
-
-        fb = fetch(f"https://mbasic.facebook.com/search/people/?q={quote(nom)}",
-                   referer="https://mbasic.facebook.com/", timeout=6)
-        _merge(result, extract_data(fb), sp, se)
-
-        bing_html = fetch(
-            f"https://www.bing.com/search?q={quote(nom + ' ' + city + ' email téléphone')}&cc=TN",
-            referer="https://www.bing.com/"
-        )
-        _merge(result, extract_data(bing_html), sp, se)
-
+    # Note : la recherche de contacts des membres est faite en Phase 2 (scrape_all)
+    # pour ne pas dépasser le timeout de la Phase 1.
     return result, "rne_borne"
 
 
@@ -651,7 +621,7 @@ def scrape_all(name: str, city: str, rne_id: str = "", context: str = "") -> lis
 
     with ThreadPoolExecutor(max_workers=12) as ex:
         fmap = {ex.submit(fn): key for key, fn in phase1.items()}
-        done, _ = wait(fmap.keys(), timeout=25, return_when=ALL_COMPLETED)
+        done, _ = wait(fmap.keys(), timeout=20, return_when=ALL_COMPLETED)
         for f in _:
             f.cancel()
         for future in done:
@@ -665,13 +635,13 @@ def scrape_all(name: str, city: str, rne_id: str = "", context: str = "") -> lis
             except Exception:
                 pass
 
-    # ── Phase 2 : recherche personnelle des membres si RNE a trouvé des gens ─
+    # ── Phase 2 : recherche personnelle des membres (uniquement si RNE trouvé) ─
     if rne_borne_r and rne_borne_r.get("members"):
         members     = rne_borne_r["members"]
         denom_latin = rne_borne_r.get("denom_latin", sn)
 
         phase2_tasks = {}
-        for i, member in enumerate(members[:4]):
+        for i, member in enumerate(members[:3]):   # max 3 membres
             nom = member.get("nom", "")
             if not nom or len(nom) < 4:
                 continue
@@ -681,7 +651,7 @@ def scrape_all(name: str, city: str, rne_id: str = "", context: str = "") -> lis
         if phase2_tasks:
             with ThreadPoolExecutor(max_workers=len(phase2_tasks)) as ex2:
                 fmap2 = {ex2.submit(fn): key for key, fn in phase2_tasks.items()}
-                done2, _ = wait(fmap2.keys(), timeout=8, return_when=ALL_COMPLETED)
+                done2, _ = wait(fmap2.keys(), timeout=6, return_when=ALL_COMPLETED)
                 for f in _:
                     f.cancel()
                 for future in done2:

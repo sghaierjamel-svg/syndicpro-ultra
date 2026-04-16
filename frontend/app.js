@@ -68,7 +68,7 @@ searchForm.addEventListener('submit', async (e) => {
 });
 
 async function doScrape(name, city, context, rne_id) {
-  searchBtnText.textContent = 'Scraping en cours…';
+  searchBtnText.textContent = 'Recherche en cours…';
   searchSpinner.classList.remove('hidden');
   searchBtn.disabled = true;
   try {
@@ -77,12 +77,21 @@ async function doScrape(name, city, context, rne_id) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ name, city, context, rne_id })
     });
-    const data = await res.json();
-    if (!res.ok) { showError(data.error || 'Erreur serveur'); return; }
+
+    let data;
+    try {
+      data = await res.json();
+    } catch (_) {
+      // Réponse non-JSON : probablement timeout serveur
+      showError(`Délai dépassé (serveur trop lent). Réessayez dans quelques secondes. [HTTP ${res.status}]`);
+      return;
+    }
+
+    if (!res.ok) { showError(data.error || `Erreur serveur (${res.status})`); return; }
     hideCandidates();
     renderResult(data);
   } catch (err) {
-    showError('Impossible de joindre le serveur.');
+    showError(`Impossible de joindre le serveur : ${err.message}`);
   } finally {
     searchBtnText.textContent = 'Lancer la recherche';
     searchSpinner.classList.add('hidden');
