@@ -414,68 +414,91 @@ def health():
 @app.route("/debug/rne")
 def debug_rne():
     """Teste la connexion RNE et retourne un rapport détaillé."""
-    import os
-    from scraper_engine import _get_rne_token, src_rne_entite
+    import os, requests as _req
+    from scraper_engine import _get_rne_token
 
-    rne_username = os.environ.get("RNE_USERNAME", "")
-    rne_password = os.environ.get("RNE_PASSWORD", "")
+    rne_username  = os.environ.get("RNE_USERNAME", "")
+    rne_password  = os.environ.get("RNE_PASSWORD", "")
     rne_token_env = os.environ.get("RNE_TOKEN", "")
 
     report = {
         "env": {
-            "RNE_USERNAME":  rne_username[:4] + "***" if rne_username else "(non défini)",
-            "RNE_PASSWORD":  "***" if rne_password else "(non défini)",
-            "RNE_TOKEN":     rne_token_env[:8] + "…" if rne_token_env else "(non défini)",
+            "RNE_USERNAME": rne_username[:4] + "***" if rne_username else "(non défini)",
+            "RNE_PASSWORD": "***" if rne_password else "(non défini)",
+            "RNE_TOKEN":    rne_token_env[:8] + "…" if rne_token_env else "(non défini)",
         },
         "token_obtenu": False,
         "token_preview": "",
-        "test_email": "",
-        "test_rne_id": "1735882881",   # ID RNE de test (syndic connu)
         "erreur": "",
     }
 
     try:
         token = _get_rne_token()
-        if token:
-            report["token_obtenu"] = True
-            report["token_preview"] = token[:8] + "…"
-        else:
+        if not token:
             report["erreur"] = "Token vide — vérifiez RNE_USERNAME et RNE_PASSWORD"
             return jsonify(report)
+        report["token_obtenu"] = True
+        report["token_preview"] = token[:8] + "…"
     except Exception as e:
-        report["erreur"] = f"Erreur lors de _get_rne_token() : {e}"
+        report["erreur"] = f"_get_rne_token() : {e}"
         return jsonify(report)
 
-    # Appel brut à l'API pour voir tous les champs retournés
+    hdrs = {
+        "Authorization": f"Bearer {token}",
+        "Referer": "https://www.registre-entreprises.tn/",
+        "Accept": "application/json",
+    }
+
+    # Étape 1 : trouver un vrai rne_id (paramètre ?rne_id= ou recherche auto)
+    rne_id_test = request.args.get("rne_id", "").strip()
+    if not rne_id_test:
+        try:
+            rs = _req.get(
+                "https://www.registre-entreprises.tn/api/rne-api/front-office/shortEntites",
+                params={"page": 0, "size": 5, "search": "syndic"},
+                headers=hdrs, timeout=15
+            )
+            report["search_status"] = rs.status_code
+            if rs.status_code == 200:
+                body = rs.json()
+                items = body if isinstance(body, list) else (body.get("content") or body.get("data") or [])
+                if items:
+                    rne_id_test = (items[0].get("identifiantUnique") or
+                                   items[0].get("id") or "")
+                    report["search_sample"] = str(items[0])[:400]
+            else:
+                report["search_raw"] = rs.text[:300]
+        except Exception as e:
+            report["erreur_search"] = str(e)
+
+    report["test_rne_id"] = rne_id_test or "(aucun trouvé)"
+
+    if not rne_id_test:
+        report["erreur"] = "Aucun rne_id valide trouvé. Ajoutez ?rne_id=XXXX dans l'URL."
+        return jsonify(report)
+
+    # Étape 2 : appel /entites/{id} et affichage brut
     try:
-        import requests as _req
         r = _req.get(
-            f"https://www.registre-entreprises.tn/api/rne-api/front-office/entites/{report['test_rne_id']}",
-            headers={
-                "Authorization": f"Bearer {token}",
-                "Referer": "https://www.registre-entreprises.tn/",
-                "Accept": "application/json",
-            },
-            timeout=15
+            f"https://www.registre-entreprises.tn/api/rne-api/front-office/entites/{rne_id_test}",
+            headers=hdrs, timeout=15
         )
         report["http_status"] = r.status_code
         if r.status_code == 200 and r.text:
             raw = r.json()
-            # Afficher tous les champs de premier niveau (valeurs tronquées)
             report["champs_disponibles"] = {
-                k: (str(v)[:80] if v not in (None, "", [], {}) else "(vide)")
+                k: (str(v)[:100] if v not in (None, "", [], {}) else "(vide)")
                 for k, v in raw.items()
             }
-            # Chercher tout champ contenant "email" ou "mail" ou "tel" ou "gsm"
             report["champs_contact"] = {
                 k: str(v)
                 for k, v in raw.items()
-                if any(x in k.lower() for x in ["email","mail","tel","gsm","phone","contact"])
+                if any(x in k.lower() for x in ["email","mail","tel","gsm","phone","contact","adresse"])
             }
         else:
-            report["erreur"] = f"HTTP {r.status_code} — {r.text[:200]}"
+            report["erreur"] = f"HTTP {r.status_code} — {r.text[:300]}"
     except Exception as e:
-        report["erreur"] = f"Erreur appel direct : {e}"
+        report["erreur"] = f"Erreur appel /entites : {e}"
 
     return jsonify(report)
 
