@@ -980,9 +980,9 @@ def scrape_all(name: str, city: str, rne_id: str = "", context: str = "") -> lis
                 for future in done2:
                     try:
                         data, source = future.result(timeout=1)
-                        if data and (data.get("phones") or data.get("emails")):
-                            data["source"] = source
-                            results.append(data)
+                        # Toujours inclure (même vide) pour le debug — le scoring les ignorera
+                        data["source"] = source
+                        results.append(data)
                     except Exception:
                         pass
 
@@ -1160,4 +1160,5 @@ def _src_member_personal(nom: str, city: str, denom_latin: str, qualite: str = "
             except Exception:
                 pass
 
+    r["noms_cherches"] = noms   # pour le debug
     return r, "member_contact"

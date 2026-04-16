@@ -525,22 +525,32 @@ def debug_scrape():
         raw    = scrape_all(name, city, rne_id=rne_id, context="syndic")
         result = compute_conformity(raw)
 
-        detail = []
+        phase1, phase2 = [], []
         for r in raw:
-            detail.append({
-                "source":  r.get("source", "?"),
-                "phones":  r.get("phones", []),
-                "emails":  r.get("emails", []),
-                "rne_id":  r.get("rne_id_found", ""),
+            src = r.get("source", "?")
+            entry = {
+                "source":    src,
+                "phones":    r.get("phones", []),
+                "emails":    r.get("emails", []),
+                "rne_id":    r.get("rne_id_found", ""),
                 "president": r.get("president", ""),
-            })
+                "members":   [m.get("nom","") for m in r.get("members", [])],
+                "noms_cherches": r.get("noms_cherches", []),
+            }
+            if src == "member_contact":
+                phase2.append(entry)
+            else:
+                phase1.append(entry)
 
         return jsonify({
             "input":        {"name": name, "city": city, "rne_id": rne_id},
-            "sources_brut": detail,
+            "phase1":       phase1,
+            "phase2_membres": phase2,
             "resultat":     {
                 "phone":       result.get("phone"),
                 "email":       result.get("email"),
+                "president":   result.get("president"),
+                "members":     result.get("members", []),
                 "global_conf": result.get("global_conf"),
                 "sources_hit": result.get("sources_hit"),
                 "found":       result.get("found"),
