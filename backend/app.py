@@ -7,8 +7,9 @@ from flask import Flask, request, jsonify, send_file
 from flask_cors import CORS
 from scraper_engine import scrape_all, get_rne_candidates
 from scoring_engine import compute_conformity
-from db import (init_db, save, get_all, get_stats, delete_all, seed_from_list,
-                set_cache, job_create, job_update, job_get)
+from db import (init_db, save, get_all, count_all, get_stats, delete_all,
+                seed_from_list, set_cache, job_create, job_update, job_get,
+                get_result, update_result, invalidate_cache)
 from excel_processor import enrich_excel
 import os
 import io
@@ -99,9 +100,54 @@ def results():
         limit      = min(int(request.args.get("limit", 200)), 500)
         offset     = int(request.args.get("offset", 0))
         only_found = request.args.get("found", "0") == "1"
-        rows = get_all(limit=limit, offset=offset, only_found=only_found)
-        return jsonify({"results": rows, "count": len(rows)})
+        rows  = get_all(limit=limit, offset=offset, only_found=only_found)
+        total = count_all(only_found=only_found)
+        return jsonify({"results": rows, "count": total})
     except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+# ── Modifier un résultat manuellement ─────────────────────────────────────────
+
+@app.route("/results/<int:row_id>", methods=["PUT"])
+def update_result_route(row_id):
+    if not check_key():
+        return jsonify({"error": "Clé API invalide"}), 401
+    body = request.get_json(silent=True) or {}
+    update_result(row_id, **body)
+    return jsonify({"status": "ok"})
+
+
+@app.route("/results/<int:row_id>", methods=["GET"])
+def get_result_route(row_id):
+    row = get_result(row_id)
+    if not row:
+        return jsonify({"error": "Résultat introuvable"}), 404
+    return jsonify(row)
+
+
+@app.route("/results/<int:row_id>/rescrape", methods=["POST"])
+def rescrape_result(row_id):
+    if not check_key():
+        return jsonify({"error": "Clé API invalide"}), 401
+    row = get_result(row_id)
+    if not row:
+        return jsonify({"error": "Résultat introuvable"}), 404
+    name   = row["name"]
+    city   = row["city"]
+    rne_id = row.get("rne_id", "")
+    invalidate_cache(name, city)
+    try:
+        raw    = scrape_all(name, city, rne_id=rne_id, context="")
+        result = compute_conformity(raw)
+        result["name"] = name
+        result["city"] = city
+        save(result)
+        if result.get("found") or result.get("president"):
+            set_cache(name, city, result)
+        return jsonify(result)
+    except Exception as e:
+        app.logger.error(f"Erreur rescrape({name},{city}): {e}\n{traceback.format_exc()}")
         return jsonify({"error": str(e)}), 500
 
 
@@ -125,6 +171,72 @@ def export_csv():
             mimetype="text/csv",
             as_attachment=True,
             download_name="contacts.csv"
+        )
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+# ── Export Excel ──────────────────────────────────────────────────────────────
+
+@app.route("/export/excel")
+def export_excel_db():
+    try:
+        only_found = request.args.get("found", "0") == "1"
+        rows = get_all(limit=5000, only_found=only_found)
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.title = "Contacts"
+
+        headers = ["ID", "Nom Résidence", "Ville", "Téléphone", "Email", "Site Web",
+                   "Président / Gérant", "Adresse", "Tous les tél.", "Tous les emails",
+                   "Confiance (%)", "Sources", "Vérifié", "Notes", "Date"]
+        ws.append(headers)
+
+        # Style entête
+        from openpyxl.styles import Font, PatternFill, Alignment
+        for cell in ws[1]:
+            cell.font      = Font(bold=True, color="FFFFFF")
+            cell.fill      = PatternFill("solid", fgColor="1E40AF")
+            cell.alignment = Alignment(horizontal="center")
+
+        for r in rows:
+            members_str = ""
+            if r.get("members"):
+                members_str = ", ".join(
+                    f"{m.get('nom','')} ({m.get('qualite','')})"
+                    for m in r["members"]
+                )
+            ws.append([
+                r.get("id", ""),
+                r.get("name", ""),
+                r.get("city", ""),
+                r.get("phone", ""),
+                r.get("email", ""),
+                r.get("website", ""),
+                members_str or r.get("president", ""),
+                r.get("address", ""),
+                r.get("all_phones", ""),
+                r.get("all_emails", ""),
+                r.get("confidence", 0),
+                r.get("sources_hit", ""),
+                "Oui" if r.get("verified") else "",
+                r.get("notes", ""),
+                r.get("created_at", "")[:16] if r.get("created_at") else "",
+            ])
+
+        # Ajuster largeur colonnes
+        for col in ws.columns:
+            max_len = max((len(str(cell.value or "")) for cell in col), default=0)
+            ws.column_dimensions[col[0].column_letter].width = min(max_len + 2, 45)
+
+        buf = io.BytesIO()
+        wb.save(buf)
+        buf.seek(0)
+        return send_file(
+            buf,
+            mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            as_attachment=True,
+            download_name="contacts_syndicpro.xlsx"
         )
     except Exception as e:
         return jsonify({"error": str(e)}), 500

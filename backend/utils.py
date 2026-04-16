@@ -9,7 +9,6 @@ from bs4 import BeautifulSoup
 # ── Téléphones ──────────────────────────────────────────────────────────────
 
 # Format avec séparateurs : XX XXX XXX ou XX-XXX-XXX ou XX.XXX.XXX
-# Très fiable, peu de faux positifs
 RE_PHONE_SEP = re.compile(
     r'(?:(?:\+|00)216[\s.\-]?)?'
     r'\b([2-9]\d[\s.\-]\d{3}[\s.\-]\d{3})\b'
@@ -18,7 +17,7 @@ RE_PHONE_SEP = re.compile(
 # Format compact (8 chiffres) — seulement après un mot-clé téléphonique
 RE_PHONE_KEYWORD = re.compile(
     r'(?:tél?\.?|gsm|mob(?:ile)?\.?|fixe|num[ée]ro|tel\.?|contact|appel|'
-    r'joindre|appeler|ligne|portable|cel\.?)\s*[:\s\-]*'
+    r'joindre|appeler|ligne|portable|cel\.?|هاتف|رقم|اتصل)\s*[:\s\-]*'
     r'(?:(?:\+|00)?216[\s.\-]?)?'
     r'([2-9]\d{7})',
     re.IGNORECASE | re.UNICODE
@@ -27,6 +26,15 @@ RE_PHONE_KEYWORD = re.compile(
 # Format +216XXXXXXXX ou 00216XXXXXXXX — très fiable
 RE_PHONE_INTL = re.compile(
     r'(?:\+216|00216)[\s.\-]?([2-9]\d{7}|\d{2}[\s.\-]\d{3}[\s.\-]\d{3})'
+)
+
+# 8 chiffres bruts — seulement si entouré de séparateurs non-numériques
+# et si le contexte proche contient un mot de contact
+RE_PHONE_BARE = re.compile(r'(?<!\d)([2-9]\d{7})(?!\d)')
+_PHONE_CTX = re.compile(
+    r'(?:tél?|gsm|mob|fixe|contact|phone|هاتف|رقم|numéro|appel|'
+    r'joindre|coordonnées|portable|ligne)',
+    re.IGNORECASE | re.UNICODE
 )
 
 # ── Emails ──────────────────────────────────────────────────────────────────
@@ -121,6 +129,14 @@ def extract_data(html: str) -> dict:
 
     for m in RE_PHONE_KEYWORD.finditer(text):
         _add_phone(m.group(1))
+
+    # 4. Numéros 8 chiffres bruts si contexte téléphonique proche
+    for m in RE_PHONE_BARE.finditer(text):
+        raw = m.group(1)
+        idx = m.start()
+        ctx = text[max(0, idx - 120):idx + 40]
+        if _PHONE_CTX.search(ctx):
+            _add_phone(raw)
 
     # ── 3. Emails ─────────────────────────────────────────────────────────────
     seen_emails: set[str] = set()

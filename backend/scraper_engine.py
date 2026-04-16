@@ -326,6 +326,44 @@ def src_annuaire(name, city, short, context=""):
     return r, "annuaires"
 
 
+def src_google_maps(name, city, short, context=""):
+    """Google local search — Knowledge Panel + Maps résultats contiennent souvent le numéro."""
+    r   = {"phones": [], "emails": [], "websites": []}
+    sp, se = set(), set()
+    for q in [
+        f"{short} {city} tunisie",
+        f"{name} {city} تونس",
+    ]:
+        # Recherche Google locale
+        html = fetch(
+            f"https://www.google.com/search?q={quote(q)}&hl=fr&gl=tn&num=5",
+            referer="https://www.google.com/", timeout=7
+        )
+        if html:
+            _merge(r, extract_data(html), sp, se)
+            if r["phones"] or r["emails"]:
+                break
+    return r, "google_maps"
+
+
+def src_tayara(name, city, short, context=""):
+    """Tayara.tn — annonces immobilières mentionnent souvent le contact du syndic."""
+    r  = {"phones": [], "emails": [], "websites": []}
+    sp, se = set(), set()
+    for q in [short, f"{short} {city}"]:
+        html = fetch(
+            f"https://www.tayara.tn/ads/c/Immobilier/?q={quote(q)}",
+            referer="https://www.tayara.tn/", timeout=7
+        )
+        d = extract_data(html)
+        # Filtrer le numéro de Tayara lui-même (+216 95 256 096)
+        d["phones"] = [p for p in d.get("phones", []) if p != "+21695256096"]
+        _merge(r, d, sp, se)
+        if r["phones"] or r["emails"]:
+            break
+    return r, "tayara"
+
+
 def src_linkedin(name, city, short, context=""):
     """LinkedIn via DDG — trouve les pages entreprises avec email de contact."""
     r  = {"phones": [], "emails": [], "websites": []}
@@ -610,16 +648,18 @@ def scrape_all(name: str, city: str, rne_id: str = "", context: str = "") -> lis
         "pj_tn":     lambda: src_pj_tn(name, city, sn, context),
         "yellow_tn": lambda: src_yellow_tn(name, city, sn, context),
         "annuaires": lambda: src_annuaire(name, city, sn, context),
-        "linkedin":  lambda: src_linkedin(name, city, sn, context),
-        "rne_old":   lambda: src_rne_old(name, city, rne_id),
-        "rne_borne": lambda: src_rne_borne(name, city, sn, rne_id),
-        "crawler":   lambda: src_contact_crawler(name, city, sn, context),
+        "linkedin":     lambda: src_linkedin(name, city, sn, context),
+        "google_maps":  lambda: src_google_maps(name, city, sn, context),
+        "tayara":       lambda: src_tayara(name, city, sn, context),
+        "rne_old":      lambda: src_rne_old(name, city, rne_id),
+        "rne_borne":    lambda: src_rne_borne(name, city, sn, rne_id),
+        "crawler":      lambda: src_contact_crawler(name, city, sn, context),
     }
 
     results      = []
     rne_borne_r  = None
 
-    with ThreadPoolExecutor(max_workers=12) as ex:
+    with ThreadPoolExecutor(max_workers=14) as ex:
         fmap = {ex.submit(fn): key for key, fn in phase1.items()}
         done, _ = wait(fmap.keys(), timeout=20, return_when=ALL_COMPLETED)
         for f in _:

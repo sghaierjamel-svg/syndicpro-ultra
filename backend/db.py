@@ -27,6 +27,8 @@ COLUMN_DEFS = {
     "members":     "TEXT    DEFAULT ''",
     "address":     "TEXT    DEFAULT ''",
     "created_at":  "TEXT    DEFAULT '1970-01-01 00:00:00'",
+    "verified":    "INTEGER DEFAULT 0",
+    "notes":       "TEXT    DEFAULT ''",
 }
 REQUIRED_COLUMNS = {"id", "name", "city"} | set(COLUMN_DEFS.keys())
 
@@ -78,7 +80,9 @@ def init_db():
             president   TEXT DEFAULT '',
             members     TEXT DEFAULT '',
             address     TEXT DEFAULT '',
-            created_at  TEXT DEFAULT CURRENT_TIMESTAMP
+            created_at  TEXT DEFAULT CURRENT_TIMESTAMP,
+            verified    INTEGER DEFAULT 0,
+            notes       TEXT DEFAULT ''
         )
     """)
     conn.commit()
@@ -157,13 +161,16 @@ def _recreate_table(c):
             president   TEXT DEFAULT '',
             members     TEXT DEFAULT '',
             address     TEXT DEFAULT '',
-            created_at  TEXT DEFAULT CURRENT_TIMESTAMP
+            created_at  TEXT DEFAULT CURRENT_TIMESTAMP,
+            verified    INTEGER DEFAULT 0,
+            notes       TEXT DEFAULT ''
         )
     """)
     old_cols = _existing_columns(c) & {
         "id","name","city","phone","email","website",
         "all_phones","all_emails","sources_hit","confidence",
-        "found","rne_id","president","members","address","created_at"
+        "found","rne_id","president","members","address","created_at",
+        "verified","notes"
     }
     if old_cols:
         cols = ", ".join(old_cols)
@@ -309,6 +316,15 @@ def get_all(limit=500, offset=0, only_found=False):
     return [_parse_row(r) for r in rows]
 
 
+def count_all(only_found=False):
+    conn  = get_conn()
+    c     = conn.cursor()
+    q     = "SELECT COUNT(*) FROM results WHERE found=1" if only_found else "SELECT COUNT(*) FROM results"
+    total = c.execute(q).fetchone()[0]
+    conn.close()
+    return total
+
+
 def get_stats():
     conn     = get_conn()
     c        = conn.cursor()
@@ -340,6 +356,45 @@ def seed_from_list(syndics):
     conn.commit()
     conn.close()
     return inserted
+
+
+def get_result(row_id):
+    conn = get_conn()
+    row  = conn.execute("SELECT * FROM results WHERE id=?", (row_id,)).fetchone()
+    conn.close()
+    return _parse_row(row) if row else None
+
+
+def update_result(row_id, **kwargs):
+    """Met à jour les champs d'un résultat (phone, email, website, notes, verified, etc.)."""
+    if not kwargs:
+        return
+    # Champs autorisés pour la mise à jour manuelle
+    allowed = {"phone","email","website","all_phones","all_emails",
+               "president","address","notes","verified","confidence","found"}
+    filtered = {k: v for k, v in kwargs.items() if k in allowed}
+    if not filtered:
+        return
+    sets = ", ".join(f"{k}=?" for k in filtered)
+    vals = list(filtered.values()) + [row_id]
+    conn = get_conn()
+    conn.execute(f"UPDATE results SET {sets} WHERE id=?", vals)
+    conn.commit()
+    conn.close()
+
+
+def invalidate_cache(name, city):
+    """Supprime l'entrée cache pour forcer un nouveau scraping."""
+    key = _cache_key(name, city)
+    with _cache_lock:
+        _mem_cache.pop(key, None)
+    try:
+        conn = get_conn()
+        conn.execute("DELETE FROM scrape_cache WHERE key=?", (key,))
+        conn.commit()
+        conn.close()
+    except Exception:
+        pass
 
 
 def delete_all():

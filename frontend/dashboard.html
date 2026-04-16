@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>SyndicPro Scanner — Tableau de bord</title>
-  <link rel="stylesheet" href="style.css?v=6">
+  <link rel="stylesheet" href="style.css?v=8">
   <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📊</text></svg>">
 </head>
 <body>
@@ -44,8 +44,16 @@
         <option value="all">Tous les résultats</option>
         <option value="found">Contacts trouvés seulement</option>
       </select>
-      <a href="/export/csv" class="btn-secondary" id="exportCsvBtn">⬇ Exporter CSV</a>
-      <button class="btn-danger" id="clearBtn">🗑 Vider la base</button>
+      <select class="filter-select" id="confFilter" style="width:160px">
+        <option value="0">Toutes confiances</option>
+        <option value="30">Confiance ≥ 30%</option>
+        <option value="50">Confiance ≥ 50%</option>
+        <option value="70">Confiance ≥ 70%</option>
+      </select>
+      <a href="/export/csv" class="btn-secondary">⬇ CSV</a>
+      <a href="/export/excel" class="btn-secondary" id="exportExcelBtn">⬇ Excel</a>
+      <button class="btn-secondary" id="refreshBtn" title="Actualiser">↻ Actualiser</button>
+      <button class="btn-danger" id="clearBtn">🗑 Vider</button>
       <span style="margin-left:auto;font-size:.8rem;color:#94a3b8" id="countLabel"></span>
     </div>
   </div>
@@ -65,11 +73,12 @@
             <th>Confiance</th>
             <th>Statut</th>
             <th>Date</th>
+            <th>Actions</th>
           </tr>
         </thead>
         <tbody id="resultsBody">
           <tr>
-            <td colspan="9">
+            <td colspan="10">
               <div class="empty-state">
                 <div class="spinner-large"></div>
                 <p>Chargement…</p>
@@ -86,12 +95,62 @@
 
 </main>
 
+<!-- ── MODAL ÉDITION ── -->
+<div id="editModal" class="modal-overlay hidden">
+  <div class="modal-box">
+    <div class="modal-header">
+      <h3 id="modalTitle">Modifier le contact</h3>
+      <button class="modal-close" onclick="closeModal()">✕</button>
+    </div>
+
+    <input type="hidden" id="modalRowId">
+
+    <div class="modal-body">
+      <div class="form-row">
+        <div class="form-group">
+          <label>Téléphone</label>
+          <input type="text" id="modalPhone" placeholder="+216XXXXXXXX">
+        </div>
+        <div class="form-group">
+          <label>Email</label>
+          <input type="text" id="modalEmail" placeholder="contact@exemple.tn">
+        </div>
+      </div>
+      <div class="form-group">
+        <label>Site web</label>
+        <input type="text" id="modalWebsite" placeholder="https://…">
+      </div>
+      <div class="form-group">
+        <label>Président / Gérant</label>
+        <input type="text" id="modalPresident" placeholder="Nom Prénom">
+      </div>
+      <div class="form-group">
+        <label>Adresse</label>
+        <input type="text" id="modalAddress" placeholder="Rue, Ville, Code postal">
+      </div>
+      <div class="form-group">
+        <label>Notes</label>
+        <textarea id="modalNotes" rows="3" placeholder="Remarques, corrections…" style="width:100%;padding:.6rem .8rem;border:1px solid #e2e8f0;border-radius:8px;font-size:.9rem;resize:vertical"></textarea>
+      </div>
+      <div class="form-group" style="display:flex;align-items:center;gap:.5rem">
+        <input type="checkbox" id="modalVerified" style="width:1rem;height:1rem">
+        <label for="modalVerified" style="margin:0;cursor:pointer">Marquer comme vérifié manuellement</label>
+      </div>
+    </div>
+
+    <div class="modal-footer">
+      <button class="btn-secondary" onclick="closeModal()">Annuler</button>
+      <button class="btn-primary" id="modalSaveBtn" onclick="saveModal()">Enregistrer</button>
+    </div>
+  </div>
+</div>
+
 <!-- ── FOOTER ── -->
 <footer class="footer">
   <span>SyndicPro Scanner &copy; 2025</span>
   <a href="/" class="footer-link">← Nouvelle recherche</a>
 </footer>
 
-<script src="dashboard.js?v=6"></script>
+<script src="dashboard.js?v=8"></script>
 </body>
 </html>
