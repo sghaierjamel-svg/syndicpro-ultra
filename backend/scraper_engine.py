@@ -925,7 +925,7 @@ def scrape_all(name: str, city: str, rne_id: str = "", context: str = "") -> lis
 
     with ThreadPoolExecutor(max_workers=15) as ex:
         fmap = {ex.submit(fn): key for key, fn in phase1.items()}
-        done, _ = wait(fmap.keys(), timeout=20, return_when=ALL_COMPLETED)
+        done, _ = wait(fmap.keys(), timeout=15, return_when=ALL_COMPLETED)
         for f in _:
             f.cancel()
         for future in done:
@@ -991,142 +991,96 @@ def scrape_all(name: str, city: str, rne_id: str = "", context: str = "") -> lis
 
 def _src_member_personal(nom: str, city: str, denom_latin: str, qualite: str = ""):
     """
-    Recherche intensive du contact d'un membre RNE.
-    Si le nom est en arabe, on génère aussi la forme latine translittérée.
-    4 sources en parallèle : DDG, Bing, Google, Facebook (personnes + pages).
+    Recherche rapide du contact d'un membre RNE.
+    Priorité vitesse : timeout courts, 1-2 requêtes max par source.
+    Budget total : 8 secondes (sources en parallèle).
     """
     r  = {"phones": [], "emails": [], "websites": []}
     sp, se = set(), set()
 
     # Forme latine : translittération si arabe, sinon nom tel quel
     nom_latin = _ar_to_latin(nom) if _is_arabic(nom) else nom
-    # Nom de famille seul (dernier mot) — plus distinctif pour les recherches
+    # Nom de famille seul (dernier mot) — plus distinctif
     nom_famille = nom_latin.split()[-1] if nom_latin else ""
-    # On cherche avec les deux formes + nom de famille seul
-    noms = list(dict.fromkeys(filter(None, [nom_latin, nom, nom_famille])))
+    # Formes de recherche : latin complet + latin famille seulement
+    noms = list(dict.fromkeys(filter(None, [nom_latin, nom_famille])))
 
-    # Domaines à ne pas crawler (login requis / bloquent les scrapers)
-    _SKIP_DOMAINS = {'linkedin.com', 'facebook.com', 'instagram.com',
-                     'twitter.com', 'x.com', 'tiktok.com', 'youtube.com'}
+    def _quick_fetch(url: str, referer: str = "") -> dict:
+        """Fetch avec timeout court (4s) et extraction directe des snippets."""
+        html = fetch(url, timeout=4, referer=referer)
+        return extract_data(html or "")
 
-    def _crawl_search_results(query: str, engine_url: str, referer: str = "") -> dict:
-        """Cherche via moteur, extrait les URLs, crawle chaque page pour y trouver le contact."""
+    def _ddg():
         out = {"phones": [], "emails": [], "websites": []}
-        html = fetch(engine_url + quote(query), referer=referer or engine_url)
-        # Extraction contact directe dans la SERP (snippets)
-        d = extract_data(html)
-        out["phones"] += d.get("phones", [])
-        out["emails"] += d.get("emails", [])
-        if out["phones"] or out["emails"]:
+        n = noms[0] if noms else ""
+        if not n:
             return out
-        # Suivre les vraies URLs des résultats
-        urls = _extract_result_urls(html)
-        for url in urls[:4]:
-            domain = urlparse(url).netloc.replace('www.', '')
-            if any(s in domain for s in _SKIP_DOMAINS):
-                continue
-            page = fetch(url, timeout=7, referer=url)
-            if not page:
-                continue
-            d = extract_data(page)
+        for q in [
+            f'"{n}" {city} téléphone',
+            f'"{n}" {denom_latin}',
+        ]:
+            d = _quick_fetch(f"https://lite.duckduckgo.com/lite/?q={quote(q)}")
             for p in d.get("phones", []):
                 if p not in out["phones"]: out["phones"].append(p)
             for e in d.get("emails", []):
                 if e not in out["emails"]: out["emails"].append(e)
             if out["phones"] or out["emails"]:
-                break
-        return out
-
-    def _ddg():
-        out = {"phones": [], "emails": [], "websites": []}
-        for n in noms:
-            for q in [
-                f'"{n}" {city} téléphone email',
-                f'"{n}" "{denom_latin}" contact',
-                f'{n} {city} tunisie contact',
-            ]:
-                d = _crawl_search_results(q, "https://lite.duckduckgo.com/lite/?q=")
-                for p in d.get("phones", []):
-                    if p not in out["phones"]: out["phones"].append(p)
-                for e in d.get("emails", []):
-                    if e not in out["emails"]: out["emails"].append(e)
-                if out["phones"] or out["emails"]:
-                    return out
+                return out
         return out
 
     def _bing():
         out = {"phones": [], "emails": [], "websites": []}
-        for n in noms:
-            for q in [
-                f'"{n}" {city} téléphone',
-                f'{n} {denom_latin} contact',
-            ]:
-                d = _crawl_search_results(
-                    q,
-                    "https://www.bing.com/search?cc=TN&setlang=fr&q=",
-                    referer="https://www.bing.com/"
-                )
-                for p in d.get("phones", []):
-                    if p not in out["phones"]: out["phones"].append(p)
-                for e in d.get("emails", []):
-                    if e not in out["emails"]: out["emails"].append(e)
-                if out["phones"] or out["emails"]:
-                    return out
-        return out
-
-    def _platforms():
-        """Plateformes tunisiennes où les professionnels publient leur numéro."""
-        out = {"phones": [], "emails": [], "websites": []}
-        for n in noms:
-            for q in [
-                f'"{n}" téléphone',
-                f'"{n}" {city}',
-            ]:
-                # Tayara (petites annonces)
-                d = extract_data(fetch(
-                    f"https://www.tayara.tn/ads/k/{quote(n)}/",
-                    referer="https://www.tayara.tn/"
-                ))
-                for p in d.get("phones", []):
-                    if p not in out["phones"]: out["phones"].append(p)
-                for e in d.get("emails", []):
-                    if e not in out["emails"]: out["emails"].append(e)
-                # Annuaire.com.tn
-                d2 = extract_data(fetch(
-                    f"https://www.annuaire.com.tn/recherche?q={quote(n)}",
-                    referer="https://www.annuaire.com.tn/"
-                ))
-                for p in d2.get("phones", []):
-                    if p not in out["phones"]: out["phones"].append(p)
-                for e in d2.get("emails", []):
-                    if e not in out["emails"]: out["emails"].append(e)
-                if out["phones"] or out["emails"]:
-                    return out
-        return out
-
-    def _facebook():
-        out = {"phones": [], "emails": [], "websites": []}
-        for n in noms:
-            for url in [
-                f"https://mbasic.facebook.com/search/people/?q={quote(n)}",
-                f"https://mbasic.facebook.com/search/people/?q={quote(n + ' ' + city)}",
-            ]:
-                d = extract_data(fetch(url, referer="https://mbasic.facebook.com/", timeout=7))
-                for p in d.get("phones", []):
-                    if p not in out["phones"]: out["phones"].append(p)
-                for e in d.get("emails", []):
-                    if e not in out["emails"]: out["emails"].append(e)
-                if out["phones"] or out["emails"]:
-                    return out
-        # Page Facebook du syndic
-        d = extract_data(fetch(
-            f"https://mbasic.facebook.com/search/pages/?q={quote(denom_latin + ' ' + city)}",
-            referer="https://mbasic.facebook.com/", timeout=7
-        ))
+        n = noms[0] if noms else ""
+        if not n:
+            return out
+        q = f'"{n}" {city} téléphone tunisie'
+        d = _quick_fetch(
+            f"https://www.bing.com/search?cc=TN&setlang=fr&q={quote(q)}",
+            referer="https://www.bing.com/"
+        )
         for p in d.get("phones", []):
             if p not in out["phones"]: out["phones"].append(p)
         for e in d.get("emails", []):
             if e not in out["emails"]: out["emails"].append(e)
+        return out
+
+    def _platforms():
+        """Tayara + Annuaire : sources où les particuliers publient leur numéro."""
+        out = {"phones": [], "emails": [], "websites": []}
+        n = noms[0] if noms else ""
+        if not n:
+            return out
+        for url, ref in [
+            (f"https://www.tayara.tn/ads/k/{quote(n)}/", "https://www.tayara.tn/"),
+            (f"https://www.annuaire.com.tn/recherche?q={quote(n)}", "https://www.annuaire.com.tn/"),
+            (f"https://www.11880.tn/res-search.php?what={quote(n)}&where={quote(city)}", "https://www.11880.tn/"),
+        ]:
+            d = _quick_fetch(url, referer=ref)
+            for p in d.get("phones", []):
+                if p not in out["phones"]: out["phones"].append(p)
+            for e in d.get("emails", []):
+                if e not in out["emails"]: out["emails"].append(e)
+            if out["phones"] or out["emails"]:
+                return out
+        return out
+
+    def _facebook():
+        """Facebook mbasic : recherche personne + page syndic."""
+        out = {"phones": [], "emails": [], "websites": []}
+        n = noms[0] if noms else ""
+        if not n:
+            return out
+        for url in [
+            f"https://mbasic.facebook.com/search/people/?q={quote(n + ' ' + city)}",
+            f"https://mbasic.facebook.com/search/pages/?q={quote(denom_latin + ' ' + city)}",
+        ]:
+            d = _quick_fetch(url, referer="https://mbasic.facebook.com/")
+            for p in d.get("phones", []):
+                if p not in out["phones"]: out["phones"].append(p)
+            for e in d.get("emails", []):
+                if e not in out["emails"]: out["emails"].append(e)
+            if out["phones"] or out["emails"]:
+                return out
         return out
 
     def _truecaller():
@@ -1134,15 +1088,14 @@ def _src_member_personal(nom: str, city: str, denom_latin: str, qualite: str = "
         out = {"phones": [], "emails": [], "websites": []}
         if not os.environ.get("TRUECALLER_TOKEN", "").strip():
             return out
-        for n in noms[:2]:   # nom latin + nom arabe, pas le nom de famille seul
-            d = src_truecaller_query(n)
-            for p in d.get("phones", []):
-                if p not in out["phones"]: out["phones"].append(p)
-            if out["phones"]:
-                return out
+        n = noms[0] if noms else ""
+        if not n:
+            return out
+        d = src_truecaller_query(n)
+        out["phones"] = d.get("phones", [])
         return out
 
-    # Lancer les 5 sources en parallèle
+    # Lancer les 5 sources en parallèle — budget total 8s
     with ThreadPoolExecutor(max_workers=5) as pool:
         futures = {
             pool.submit(_ddg):         "ddg",
@@ -1151,7 +1104,7 @@ def _src_member_personal(nom: str, city: str, denom_latin: str, qualite: str = "
             pool.submit(_facebook):    "facebook",
             pool.submit(_truecaller):  "truecaller",
         }
-        done_m, _ = wait(futures.keys(), timeout=10, return_when=ALL_COMPLETED)
+        done_m, _ = wait(futures.keys(), timeout=8, return_when=ALL_COMPLETED)
         for f in _:
             f.cancel()
         for fut in done_m:
