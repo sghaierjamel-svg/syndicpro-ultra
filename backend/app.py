@@ -53,10 +53,13 @@ def scrape():
         return jsonify({"error": "Les champs 'name' et 'city' sont obligatoires"}), 400
 
     try:
-        raw    = scrape_all(name, city, rne_id=rne_id, context=context)
-        result = compute_conformity(raw)
+        raw        = scrape_all(name, city, rne_id=rne_id, context=context)
+        from_cache = len(raw) == 1 and raw[0].get("from_cache", False)
+        result     = compute_conformity(raw)
         result["name"] = name
         result["city"] = city
+        if from_cache:
+            result["from_cache"] = True
         save(result)
         # Mettre en cache si des contacts ont été trouvés
         if result.get("found") or result.get("president"):

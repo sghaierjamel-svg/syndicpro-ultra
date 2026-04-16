@@ -73,8 +73,13 @@ def compute_conformity(results):
         srcs  = sources_map.get(best, set())
         nsrcs = len(srcs)
 
-        # Score de base : fréquence sur le nombre de sources qui ont répondu
-        raw = min(90.0, (hits / max(total, 1)) * 100 * 2.5)
+        # ── Source officielle RNE entite → confiance minimale garantie ──────
+        # L'email déposé lors de l'immatriculation est plus fiable que
+        # n'importe quelle combinaison de sources web.
+        if "rne_entite" in srcs:
+            raw = max(70.0, min(90.0, (hits / max(total, 1)) * 100 * 2.5))
+        else:
+            raw = min(90.0, (hits / max(total, 1)) * 100 * 2.5)
 
         # Bonus concordance multi-sources
         if nsrcs >= 4:
@@ -94,18 +99,21 @@ def compute_conformity(results):
     email,   e_conf = _best_score(email_count,   email_sources)
     website, _      = _best_score(website_count, {})
 
-    # ── Global confidence — ne pénalise pas l'absence de l'autre champ ───────
+    # ── Global confidence ─────────────────────────────────────────────────────
     if phone and email:
-        global_conf = round((p_conf * 0.6 + e_conf * 0.4), 1)   # tél prime légèrement
+        global_conf = round((p_conf * 0.6 + e_conf * 0.4), 1)
     elif phone:
         global_conf = round(p_conf, 1)
     elif email:
         global_conf = round(e_conf, 1)
+    elif president or members:
+        # Données RNE (président/membres) sans contact → confiance partielle
+        global_conf = 40.0
     else:
         global_conf = 0.0
 
-    # Bonus léger si on a aussi le président RNE (données enrichies)
-    if president and global_conf > 0:
+    # Bonus si données RNE enrichissent un contact déjà trouvé
+    if (president or members) and global_conf > 0 and (phone or email):
         global_conf = min(99.0, global_conf * 1.05)
     global_conf = round(global_conf, 1)
 

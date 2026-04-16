@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>SyndicPro Scanner — Recherche de contacts syndics</title>
-  <link rel="stylesheet" href="style.css?v=7">
+  <link rel="stylesheet" href="style.css?v=8">
   <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🔍</text></svg>">
 </head>
 <body>
@@ -64,6 +64,12 @@
           <span id="searchBtnSpinner" class="spinner hidden"></span>
         </button>
       </form>
+    </div>
+
+    <!-- Bannière cold start -->
+    <div id="coldStartBanner" class="cold-start-banner hidden">
+      <div class="spinner" style="width:18px;height:18px;border-width:2px"></div>
+      <span>Le serveur se réveille, patientez 15–30 secondes…</span>
     </div>
 
     <!-- Sélection RNE (plusieurs candidats) -->
@@ -198,6 +204,6 @@
   <a href="/dashboard" class="footer-link">Tableau de bord →</a>
 </footer>
 
-<script src="app.js?v=8"></script>
+<script src="app.js?v=9"></script>
 </body>
 </html>

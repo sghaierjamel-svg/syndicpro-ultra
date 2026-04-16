@@ -26,6 +26,23 @@ const searchSpinner = document.getElementById('searchBtnSpinner');
 const resultBox     = document.getElementById('resultBox');
 const errorBox      = document.getElementById('errorBox');
 
+/* ── Cold start detection ── */
+let _coldTimer = null;
+const COLD_THRESHOLD_MS = 8000;
+
+function _startColdTimer() {
+  _coldTimer = setTimeout(() => {
+    const b = document.getElementById('coldStartBanner');
+    if (b) b.classList.remove('hidden');
+  }, COLD_THRESHOLD_MS);
+}
+
+function _stopColdTimer() {
+  if (_coldTimer) { clearTimeout(_coldTimer); _coldTimer = null; }
+  const b = document.getElementById('coldStartBanner');
+  if (b) b.classList.add('hidden');
+}
+
 searchForm.addEventListener('submit', async (e) => {
   e.preventDefault();
   const name    = document.getElementById('inputName').value.trim();
@@ -39,10 +56,12 @@ searchForm.addEventListener('submit', async (e) => {
   searchBtn.disabled = true;
   resultBox.classList.add('hidden');
   errorBox.classList.add('hidden');
+  _startColdTimer();
 
   try {
     // ── Étape 1 : chercher les candidats RNE ──────────────────────────────
     const candRes  = await fetch(`${API}/rne/candidates?name=${encodeURIComponent(name)}&city=${encodeURIComponent(city)}`);
+    _stopColdTimer();
     const candData = await candRes.json();
     const candidates = candData.candidates || [];
 
@@ -60,6 +79,7 @@ searchForm.addEventListener('submit', async (e) => {
       searchBtn.disabled = false;
     }
   } catch (err) {
+    _stopColdTimer();
     showError('Impossible de joindre le serveur. Vérifiez votre connexion.');
     searchBtnText.textContent = 'Lancer la recherche';
     searchSpinner.classList.add('hidden');
@@ -71,12 +91,14 @@ async function doScrape(name, city, context, rne_id) {
   searchBtnText.textContent = 'Recherche en cours…';
   searchSpinner.classList.remove('hidden');
   searchBtn.disabled = true;
+  _startColdTimer();
   try {
     const res = await fetch(API + '/scrape', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ name, city, context, rne_id })
     });
+    _stopColdTimer();
 
     let data;
     try {
@@ -91,6 +113,7 @@ async function doScrape(name, city, context, rne_id) {
     hideCandidates();
     renderResult(data);
   } catch (err) {
+    _stopColdTimer();
     showError(`Impossible de joindre le serveur : ${err.message}`);
   } finally {
     searchBtnText.textContent = 'Lancer la recherche';
@@ -133,7 +156,18 @@ function escHtmlSimple(s) {
 
 function renderResult(data) {
   document.getElementById('resName').textContent = data.name || '—';
-  document.getElementById('resCity').textContent = data.city || '';
+  // Cache badge inline avec le nom
+  const cityEl = document.getElementById('resCity');
+  cityEl.textContent = data.city || '';
+  const oldCacheBadge = document.getElementById('resCacheBadge');
+  if (oldCacheBadge) oldCacheBadge.remove();
+  if (data.from_cache) {
+    const cb = document.createElement('span');
+    cb.id = 'resCacheBadge';
+    cb.className = 'cache-badge';
+    cb.textContent = '⚡ Depuis le cache';
+    cityEl.after(cb);
+  }
 
   // Badge trouvé / non trouvé
   const badge = document.getElementById('resBadge');

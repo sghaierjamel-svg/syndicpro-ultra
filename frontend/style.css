@@ -541,3 +541,34 @@ code { background: var(--gray-100); padding: .1em .35em; border-radius: 4px; fon
   padding: 1rem 1.5rem;
   border-top: 1px solid var(--gray-200);
 }
+
+
+/* ── Cold start banner ── */
+.cold-start-banner {
+  display: flex;
+  align-items: center;
+  gap: .75rem;
+  background: #fef3c7;
+  border: 1px solid #f59e0b;
+  border-radius: var(--radius);
+  padding: .75rem 1rem;
+  margin: .75rem 0;
+  color: #92400e;
+  font-size: .88rem;
+  font-weight: 500;
+}
+
+/* ── Cache badge ── */
+.cache-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: .3rem;
+  background: #f1f5f9;
+  border: 1px solid #cbd5e1;
+  border-radius: 999px;
+  padding: .15rem .6rem;
+  font-size: .72rem;
+  color: #64748b;
+  margin-left: .5rem;
+  font-weight: 500;
+}
