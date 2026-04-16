@@ -391,61 +391,50 @@ def src_contact_crawler(name, city, short, context=""):
 #  RNE Borne API (Phase 1 + prépare la Phase 2)
 # ─────────────────────────────────────────────────────────────────────────────
 
+def _is_arabic(s: str) -> bool:
+    return bool(s) and any('\u0600' <= c <= '\u06ff' for c in s)
+
+
 def _rne_member(nom, qualite):
+    """Crée un membre RNE. Conserve le nom arabe et ajoute un flag."""
     nom = (nom or "").strip()
-    return {"nom": nom, "qualite": qualite} if nom else None
+    if not nom:
+        return None
+    return {
+        "nom":    nom,
+        "nom_ar": nom if _is_arabic(nom) else "",
+        "qualite": qualite,
+    }
 
 
-def _rne_core(text: str) -> str:
-    """Retire les préfixes juridiques d'une dénomination RNE."""
-    t = text.upper().strip()
-    for pfx in sorted(SHORT_NAME_PREFIXES, key=len, reverse=True):
-        pfx_up = pfx.upper()
-        if t.startswith(pfx_up + ' ') or t == pfx_up:
-            t = t[len(pfx_up):].strip(' -–')
-            break
-    for art in ['DE LA ', "DE L'", 'DES ', 'DE ', 'LA ', 'LE ', 'LES ', 'AL ', 'EL ']:
-        if t.startswith(art):
-            t = t[len(art):]
-            break
-    return t
+_STOP_WORDS = {'DE', 'LA', 'LE', 'LES', 'DES', 'AL', 'EL', 'ET', 'DU', 'AU', 'EN', 'UN', 'UNE'}
 
 
 def _rne_score(denom: str, name: str, city: str) -> float:
     """
     Score une dénomination RNE contre notre requête (nom + ville).
-    On ne se fie QU'À la denominationLatin — champ garanti présent.
+    Applique _deaccent sur TOUT pour que "RÉSIDENCE" == "RESIDENCE".
     """
-    d  = denom.upper()
-    cy = city.upper()
-
-    # Noyau sans préfixes
-    core_d = _rne_core(d)
-    core_n = _rne_core(name)
+    # Normalisation : tout en ASCII majuscule sans accents
+    d  = _deaccent(denom).upper()
+    n  = _deaccent(name).upper()
+    cy = _deaccent(city).upper()
 
     score = 0.0
 
-    # ── Correspondance ville dans la dénomination (signal le plus fiable) ──
-    # Ex: "RESIDENCE MEZIANA SOUKRA" contient "SOUKRA" → +100
+    # ── Signal le plus fort : ville dans la dénomination ──────────────────
     if cy and cy in d:
         score += 100
 
-    # ── Correspondance exacte du noyau ──────────────────────────────────────
-    if core_n and core_d == core_n:
-        score += 80
-    elif core_n and core_n in core_d:
-        score += 60
-    elif core_n and core_d in core_n:
-        score += 40
-
-    # ── Overlap mot par mot ──────────────────────────────────────────────────
-    STOP = {'DE', 'LA', 'LE', 'LES', 'DES', 'AL', 'EL', 'ET', 'DU', 'AU'}
-    n_words = set(core_n.split()) - STOP
-    d_words = set(core_d.split()) - STOP
+    # ── Overlap mot par mot sur le nom complet (sans stop words) ──────────
+    # On compare les mots du NOM DE REQUÊTE vs les mots de la DENOMINATION
+    # Ex: "RESIDENCE MEZIANA" vs "SYNDIC RESIDENCE MEZIANA" → 2 mots en commun
+    n_words = set(n.split()) - _STOP_WORDS
+    d_words = set(d.split()) - _STOP_WORDS
     if n_words and d_words:
-        overlap = n_words & d_words
-        # Pénaliser si candidat a beaucoup plus de mots (trop différent)
-        score += len(overlap) * 10 - max(0, len(d_words) - len(n_words) - 2) * 5
+        overlap   = n_words & d_words
+        n_covered = len(overlap) / len(n_words)   # % des mots de la requête trouvés
+        score += len(overlap) * 20 + n_covered * 20
 
     return score
 
@@ -560,17 +549,22 @@ def src_rne_borne(name, city, short):
     # ── 5. Chercher les contacts des membres ──────────────────────────────────
     sp, se = set(), set()
     for member in unique_members[:3]:
-        nom = member["nom"]
+        nom    = member["nom"]       # Latin (translittéré)
+        nom_ar = member.get("nom_ar", "")  # Arabe original si disponible
         if not nom or len(nom) < 4:
             continue
-        for q in [
-            f'"{nom}" {city} email téléphone',
-            f'"{nom}" "{denom_latin}"',
-            f'"{nom}" {city} contact',
-            f'"{nom}" email',
-        ]:
-            d = extract_data(fetch(f"https://lite.duckduckgo.com/lite/?q={quote(q)}", timeout=6))
-            _merge(result, d, sp, se)
+        search_names = [n for n in [nom, nom_ar] if n and len(n) >= 4]
+        for search_nom in search_names:
+            for q in [
+                f'"{search_nom}" {city} email téléphone',
+                f'"{search_nom}" "{denom_latin}"',
+                f'"{search_nom}" {city} contact',
+                f'"{search_nom}" email',
+            ]:
+                d = extract_data(fetch(f"https://lite.duckduckgo.com/lite/?q={quote(q)}", timeout=6))
+                _merge(result, d, sp, se)
+                if result["phones"] or result["emails"]:
+                    break
             if result["phones"] or result["emails"]:
                 break
 
