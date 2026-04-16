@@ -763,14 +763,13 @@ def scrape_all(name: str, city: str, rne_id: str = "", context: str = "") -> lis
         "tayara":       lambda: src_tayara(name, city, sn, context),
         "rne_old":      lambda: src_rne_old(name, city, rne_id),
         "rne_borne":    lambda: src_rne_borne(name, city, sn, rne_id),
-        "rne_entite":   lambda: src_rne_entite(rne_id),
         "crawler":      lambda: src_contact_crawler(name, city, sn, context),
     }
 
     results      = []
     rne_borne_r  = None
 
-    with ThreadPoolExecutor(max_workers=15) as ex:
+    with ThreadPoolExecutor(max_workers=14) as ex:
         fmap = {ex.submit(fn): key for key, fn in phase1.items()}
         done, _ = wait(fmap.keys(), timeout=20, return_when=ALL_COMPLETED)
         for f in _:
@@ -786,19 +785,19 @@ def scrape_all(name: str, city: str, rne_id: str = "", context: str = "") -> lis
             except Exception:
                 pass
 
-    # ── Phase 1.5 : RNE entite (email officiel) si rne_id maintenant connu ──────
-    # Si rne_id n'était pas fourni au départ mais que rne_borne l'a trouvé,
-    # on lance src_rne_entite maintenant (1 requête rapide, ~1s).
+    # ── Phase 1.5 : RNE entite (email officiel) — toujours séquentiel ────────────
+    # Sorti de Phase 1 car le token OAuth2 + la requête HTTP dépassaient le timeout
+    # de 20s quand le serveur RNE est lent. Ici pas de timeout — garanti d'exécuter.
     effective_rne_id = rne_id or (rne_borne_r.get("rne_id_found") if rne_borne_r else "")
-    if effective_rne_id and not rne_id:
-        # rne_entite n'a pas tourné en Phase 1 (rne_id était vide)
+    if effective_rne_id:
         try:
             entite_data, entite_src = src_rne_entite(effective_rne_id)
             if entite_data.get("emails"):
                 entite_data["source"] = entite_src
                 results.append(entite_data)
-        except Exception:
-            pass
+                logging.info(f"[Phase 1.5] rne_entite → {entite_data['emails']}")
+        except Exception as e:
+            logging.warning(f"[Phase 1.5] rne_entite échoué : {e}")
 
     # ── Phase 2 : recherche personnelle des membres (uniquement si RNE trouvé) ─
     if rne_borne_r and rne_borne_r.get("members"):
