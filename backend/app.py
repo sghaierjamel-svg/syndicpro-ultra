@@ -5,7 +5,7 @@ Nouveautés : enrichissement Excel asynchrone, cache, context générique.
 
 from flask import Flask, request, jsonify, send_file
 from flask_cors import CORS
-from scraper_engine import scrape_all, get_rne_candidates
+from scraper_engine import scrape_all, get_rne_candidates, src_truecaller_query
 from scoring_engine import compute_conformity
 from db import (init_db, save, get_all, count_all, get_stats, delete_all,
                 seed_from_list, set_cache, job_create, job_update, job_get,
@@ -549,6 +549,110 @@ def debug_scrape():
     except Exception as e:
         import traceback
         return jsonify({"erreur": str(e), "trace": traceback.format_exc()}), 500
+
+
+# ── Truecaller — auth + test ──────────────────────────────────────────────────
+
+@app.route("/admin/truecaller-otp", methods=["POST"])
+def truecaller_otp():
+    """
+    Étape 1 : demande d'envoi OTP Truecaller sur le numéro de téléphone fourni.
+    Body JSON : {"phone": "+21699xxxxxx"}
+    Truecaller envoie un SMS avec un code à 6 chiffres.
+    """
+    import requests as _req
+    body  = request.get_json(silent=True) or {}
+    phone = (body.get("phone") or "").strip()
+    if not phone:
+        return jsonify({"error": "Champ 'phone' manquant"}), 400
+
+    # Numéro au format E.164
+    if not phone.startswith("+"):
+        phone = "+216" + phone.lstrip("0")
+
+    try:
+        r = _req.post(
+            "https://account.truecaller.com/api/v1/registration/sendOtp",
+            json={"phoneNumber": phone, "countryCode": "TN"},
+            headers={
+                "Content-Type":  "application/json",
+                "User-Agent":    "Truecaller/11.75.5 (Android)",
+                "clientId":      "4",
+            },
+            timeout=10
+        )
+        return jsonify({"status": r.status_code, "body": r.text[:400]})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/admin/truecaller-verify", methods=["POST"])
+def truecaller_verify():
+    """
+    Étape 2 : vérification OTP → retourne le Bearer token.
+    Body JSON : {"phone": "+21699xxxxxx", "otp": "123456"}
+    Copiez le token retourné dans la variable TRUECALLER_TOKEN sur Render.
+    """
+    import requests as _req
+    body  = request.get_json(silent=True) or {}
+    phone = (body.get("phone") or "").strip()
+    otp   = (body.get("otp")   or "").strip()
+    if not phone or not otp:
+        return jsonify({"error": "Champs 'phone' et 'otp' requis"}), 400
+
+    if not phone.startswith("+"):
+        phone = "+216" + phone.lstrip("0")
+
+    try:
+        r = _req.post(
+            "https://account.truecaller.com/api/v1/registration/verifyOtp",
+            json={"phoneNumber": phone, "countryCode": "TN", "otp": otp},
+            headers={
+                "Content-Type":  "application/json",
+                "User-Agent":    "Truecaller/11.75.5 (Android)",
+                "clientId":      "4",
+            },
+            timeout=10
+        )
+        body_json = {}
+        try:
+            body_json = r.json()
+        except Exception:
+            pass
+
+        token = (body_json.get("token") or body_json.get("access_token") or
+                 body_json.get("accessToken") or "")
+        return jsonify({
+            "status":    r.status_code,
+            "token":     token,
+            "raw":       r.text[:600],
+            "action":    "Copiez 'token' dans la variable TRUECALLER_TOKEN sur Render" if token else "",
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/admin/truecaller-test")
+def truecaller_test():
+    """
+    Teste le token Truecaller stocké dans TRUECALLER_TOKEN.
+    Paramètre : ?q=nom (ex: ?q=Lassad+Zitouni)
+    """
+    from scraper_engine import src_truecaller_query
+    token = os.environ.get("TRUECALLER_TOKEN", "").strip()
+    q = (request.args.get("q") or "Lassad Zitouni").strip()
+    if not token:
+        return jsonify({
+            "error":   "Variable TRUECALLER_TOKEN non définie",
+            "action":  "1) POST /admin/truecaller-otp  2) POST /admin/truecaller-verify  3) Coller le token dans Render"
+        }), 400
+    result = src_truecaller_query(q)
+    return jsonify({
+        "query":        q,
+        "token_preview": token[:8] + "…",
+        "phones":       result.get("phones", []),
+        "found":        bool(result.get("phones")),
+    })
 
 
 # ── Pages frontend ─────────────────────────────────────────────────────────────

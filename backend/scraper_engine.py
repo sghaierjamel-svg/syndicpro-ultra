@@ -437,6 +437,73 @@ def src_google_maps(name, city, short, context=""):
     return r, "google_maps"
 
 
+def src_truecaller_query(query: str, country: str = "TN") -> dict:
+    """
+    Truecaller — recherche par nom (API non officielle v2).
+    Requiert TRUECALLER_TOKEN dans les variables d'env (Bearer token extrait
+    de l'appli mobile via proxy réseau ou mitmproxy).
+    """
+    token = os.environ.get("TRUECALLER_TOKEN", "").strip()
+    if not token:
+        return {"phones": [], "emails": [], "websites": []}
+
+    r = {"phones": [], "emails": [], "websites": []}
+    try:
+        resp = requests.get(
+            "https://search.truecaller.com/v2/search",
+            params={"q": query, "countryCode": country,
+                    "type": "4", "encoding": "json"},
+            headers={
+                "Authorization":  f"Bearer {token}",
+                "Content-Type":   "application/json; charset=UTF-8",
+                "User-Agent":     "Truecaller/11.75.5 (Android)",
+                "clientId":       "4",
+            },
+            timeout=8
+        )
+        if resp.status_code == 401:
+            logging.warning("[Truecaller] Token invalide / expiré")
+            return r
+        if resp.status_code == 200 and resp.text:
+            data = resp.json()
+            for item in data.get("data", []):
+                for ph in item.get("phones", []):
+                    num = (ph.get("e164Format") or ph.get("nationalFormat") or "").strip()
+                    num = re.sub(r"[\s\-\(\)]", "", num)
+                    if num and len(num) >= 8:
+                        if num.startswith("216") and not num.startswith("+"):
+                            num = "+" + num
+                        elif not num.startswith("+") and len(num) == 8:
+                            num = f"+216{num}"
+                        if num not in r["phones"]:
+                            r["phones"].append(num)
+    except Exception as e:
+        logging.warning(f"[Truecaller] {query}: {e}")
+    return r
+
+
+def src_11880(name, city, short, context=""):
+    """11880.tn — annuaire téléphonique tunisien."""
+    r  = {"phones": [], "emails": [], "websites": []}
+    sp, se = set(), set()
+    for q in [short, f"{short} {city}"]:
+        html = fetch(
+            f"https://www.11880.tn/res-search.php?what={quote(q)}&where={quote(city)}",
+            referer="https://www.11880.tn/", timeout=7
+        )
+        if not html:
+            # Essai URL alternative
+            html = fetch(
+                f"https://www.11880.tn/search?q={quote(q)}&l={quote(city)}",
+                referer="https://www.11880.tn/", timeout=7
+            )
+        d = extract_data(html or "")
+        _merge(r, d, sp, se)
+        if r["phones"] or r["emails"]:
+            return r, "11880"
+    return r, "11880"
+
+
 def src_tayara(name, city, short, context=""):
     """Tayara.tn — annonces immobilières mentionnent souvent le contact du syndic."""
     r  = {"phones": [], "emails": [], "websites": []}
@@ -850,12 +917,13 @@ def scrape_all(name: str, city: str, rne_id: str = "", context: str = "") -> lis
         "rne_old":      lambda: src_rne_old(name, city, rne_id),
         "rne_borne":    lambda: src_rne_borne(name, city, sn, rne_id),
         "crawler":      lambda: src_contact_crawler(name, city, sn, context),
+        "11880":        lambda: src_11880(name, city, sn, context),
     }
 
     results      = []
     rne_borne_r  = None
 
-    with ThreadPoolExecutor(max_workers=14) as ex:
+    with ThreadPoolExecutor(max_workers=15) as ex:
         fmap = {ex.submit(fn): key for key, fn in phase1.items()}
         done, _ = wait(fmap.keys(), timeout=20, return_when=ALL_COMPLETED)
         for f in _:
@@ -1061,13 +1129,27 @@ def _src_member_personal(nom: str, city: str, denom_latin: str, qualite: str = "
             if e not in out["emails"]: out["emails"].append(e)
         return out
 
-    # Lancer les 4 sources en parallèle
-    with ThreadPoolExecutor(max_workers=4) as pool:
+    def _truecaller():
+        """Truecaller — actif uniquement si TRUECALLER_TOKEN est défini."""
+        out = {"phones": [], "emails": [], "websites": []}
+        if not os.environ.get("TRUECALLER_TOKEN", "").strip():
+            return out
+        for n in noms[:2]:   # nom latin + nom arabe, pas le nom de famille seul
+            d = src_truecaller_query(n)
+            for p in d.get("phones", []):
+                if p not in out["phones"]: out["phones"].append(p)
+            if out["phones"]:
+                return out
+        return out
+
+    # Lancer les 5 sources en parallèle
+    with ThreadPoolExecutor(max_workers=5) as pool:
         futures = {
-            pool.submit(_ddg):       "ddg",
-            pool.submit(_bing):      "bing",
-            pool.submit(_platforms): "platforms",
-            pool.submit(_facebook):  "facebook",
+            pool.submit(_ddg):         "ddg",
+            pool.submit(_bing):        "bing",
+            pool.submit(_platforms):   "platforms",
+            pool.submit(_facebook):    "facebook",
+            pool.submit(_truecaller):  "truecaller",
         }
         done_m, _ = wait(futures.keys(), timeout=10, return_when=ALL_COMPLETED)
         for f in _:

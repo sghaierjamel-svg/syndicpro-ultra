@@ -6,7 +6,7 @@ Corrections :
   - sources haute confiance (RNE, facebook, crawler) boostent le score
 """
 
-HIGH_TRUST_SOURCES = {"rne_borne", "rne_entite", "rne", "pagesjaunes", "yellow_tn", "crawler", "facebook"}
+HIGH_TRUST_SOURCES = {"rne_borne", "rne_entite", "rne", "pagesjaunes", "yellow_tn", "crawler", "facebook", "11880", "truecaller"}
 
 
 def compute_conformity(results):
