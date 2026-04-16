@@ -103,38 +103,69 @@ _AR_MAP = {
 
 def _ar_to_latin(text: str) -> str:
     """
-    Translittération arabe → latin pour les noms tunisiens.
-    Ex: 'الاسعد الزيتوني' → 'El Assaad Zitouni'
-        'محمد علي الجبري' → 'Mohamed Ali Jebri'
-        'جمال الصغير'     → 'Jamal Saghir'
+    Translittération arabe → latin, calibrée pour les noms tunisiens.
+    Prénoms et noms de famille communs sont dans un dictionnaire dédié.
+    Ex: 'الاسعد الزيتوني' → 'Lassad Zitouni'
+        'محمد علي الجبري' → 'Mohamed Ali Jerbi'
+        'جمال الصغير'     → 'Jamel Sghaier'
     """
-    # Corrections de mots courants avant translittération
+    # ── Dictionnaire tunisien (prénoms + noms de famille courants) ────────────
     _FIXES = {
-        'بن': 'ben', 'بنت': 'bent', 'ابن': 'ibn',
-        'محمد': 'Mohamed', 'أحمد': 'Ahmed', 'علي': 'Ali',
-        'عمر': 'Omar', 'حسن': 'Hassen', 'حسين': 'Houcine',
-        'يوسف': 'Youssef', 'خالد': 'Khaled', 'سمير': 'Samir',
-        'كريم': 'Karim', 'نادر': 'Nader', 'هشام': 'Hichem',
-        'فاطمة': 'Fatma', 'منى': 'Mona', 'سارة': 'Sara',
-        'رضا': 'Ridha', 'نجيب': 'Nejib', 'توفيق': 'Taoufik',
+        # Particules
+        'بن':'Ben','بنت':'Bent','ابن':'Ibn','ام':'Om','ابو':'Abou',
+        # Prénoms masculins
+        'محمد':'Mohamed','أحمد':'Ahmed','علي':'Ali','عمر':'Omar',
+        'حسن':'Hassen','حسين':'Houcine','يوسف':'Youssef','خالد':'Khaled',
+        'سمير':'Samir','كريم':'Karim','نادر':'Nader','هشام':'Hichem',
+        'رضا':'Ridha','نجيب':'Nejib','توفيق':'Taoufik','صالح':'Salah',
+        'مراد':'Mourad','لطفي':'Lotfi','عماد':'Emad','وليد':'Walid',
+        'بلال':'Bilel','زياد':'Zied','ياسين':'Yassine','معز':'Moez',
+        'منير':'Mounir','طارق':'Tarek','ربيع':'Rabii','أنيس':'Anis',
+        'فوزي':'Fauzi','شكري':'Chokri','عادل':'Adel','جمال':'Jamel',
+        'الاسعد':'Lassad','الأسعد':'Lassad','العربي':'Larbi',
+        'المنصف':'Moncef','الطيب':'Letaief','الهادي':'Lhadi',
+        'النوري':'Nouri','الحبيب':'Lhbib',
+        # Prénoms féminins
+        'فاطمة':'Fatma','منى':'Mona','سارة':'Sara','لينا':'Lina',
+        'نور':'Nour','هنا':'Hana','ريم':'Rim','أميرة':'Amira',
+        'سوسن':'Sawsen','سلمى':'Selma','راندة':'Randa',
+        # Noms de famille tunisiens courants
+        'الزيتوني':'Zitouni','الزيتونة':'Zitouna',
+        'الجبري':'Jerbi','الجربي':'Jerbi',
+        'الصغير':'Sghaier','الكبير':'Kbir',
+        'بن علي':'Ben Ali','بن سالم':'Ben Salem','بن يوسف':'Ben Youssef',
+        'بن عمر':'Ben Omar','بن حسن':'Ben Hassen','بن أحمد':'Ben Ahmed',
+        'بوعلي':'Bouali','بوعزيز':'Bouaziz','بوزيد':'Bouzid',
+        'التركي':'Turki','العمري':'Omri','الشابي':'Chabi',
+        'الورتاني':'Ourtani','الحمروني':'Hamrouni','الشايبي':'Chaabi',
+        'المرزوقي':'Marzougui','الغضبان':'Ghadbane','الحداد':'Haddad',
+        'اليوسفي':'Yousfi','السعيدي':'Saidi','الرشيدي':'Rachidi',
     }
     result = []
-    for word in text.split():
-        if word in _FIXES:
-            result.append(_FIXES[word])
+    words = text.split()
+    i = 0
+    while i < len(words):
+        # Essayer bi-gramme d'abord (ex: 'بن علي')
+        if i + 1 < len(words):
+            bigram = words[i] + ' ' + words[i+1]
+            if bigram in _FIXES:
+                result.append(_FIXES[bigram])
+                i += 2
+                continue
+        w = words[i]
+        if w in _FIXES:
+            result.append(_FIXES[w])
+            i += 1
             continue
-        # Garder "El" si article défini ال
-        prefix = ''
-        w = word
+        # Translittération générique
         if w.startswith('ال'):
-            prefix = 'El '
-            w = w[2:]
+            w = w[2:]   # supprimer l'article (les noms tunisiens le gardent dans leur form usuelle)
         latin = ''.join(_AR_MAP.get(c, '') for c in w)
         latin = re.sub(r'[^\x00-\x7F]+', '', latin).strip()
-        # Ajouter 'a' entre deux consonnes consécutives
         latin = re.sub(r'([bcdfghjklmnpqrstvwxz])([bcdfghjklmnpqrstvwxz])', r'\1a\2', latin)
         if latin:
-            result.append((prefix + latin).strip().capitalize())
+            result.append(latin.capitalize())
+        i += 1
     return ' '.join(result)
 
 def _is_arabic(s: str) -> bool:
@@ -901,8 +932,10 @@ def _src_member_personal(nom: str, city: str, denom_latin: str, qualite: str = "
 
     # Forme latine : translittération si arabe, sinon nom tel quel
     nom_latin = _ar_to_latin(nom) if _is_arabic(nom) else nom
-    # On cherche avec les deux formes pour maximiser les résultats
-    noms = list(dict.fromkeys(filter(None, [nom, nom_latin])))
+    # Nom de famille seul (dernier mot) — plus distinctif pour les recherches
+    nom_famille = nom_latin.split()[-1] if nom_latin else ""
+    # On cherche avec les deux formes + nom de famille seul
+    noms = list(dict.fromkeys(filter(None, [nom_latin, nom, nom_famille])))
 
     def _ddg():
         out = {"phones": [], "emails": [], "websites": []}
