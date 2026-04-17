@@ -581,13 +581,28 @@ def truecaller_otp():
         phone = "+216" + phone.lstrip("0")
 
     try:
+        from phonenumbers import parse as _parse_phone
+        pn = _parse_phone(phone, None)
         r = _req.post(
-            "https://account.truecaller.com/api/v1/registration/sendOtp",
-            json={"phoneNumber": phone, "countryCode": "TN"},
+            "https://account-asia-south1.truecaller.com/v2/sendOnboardingOtp",
+            json={
+                "countryCode": "TN",
+                "dialingCode": 216,
+                "phoneNumber": str(pn.national_number),
+                "region": "region-2",
+                "sequenceNo": 2,
+                "installationDetails": {
+                    "app": {"buildVersion": 5, "majorVersion": 11, "minorVersion": 7, "store": "GOOGLE_PLAY"},
+                    "device": {"deviceId": "a1b2c3d4e5f6g7h8", "language": "en", "manufacturer": "Samsung",
+                               "model": "Galaxy S21", "osName": "Android", "osVersion": "10", "mobileServices": ["GMS"]},
+                    "language": "en",
+                },
+            },
             headers={
-                "Content-Type":  "application/json",
-                "User-Agent":    "Truecaller/11.75.5 (Android)",
-                "clientId":      "4",
+                "content-type":   "application/json; charset=UTF-8",
+                "accept-encoding": "gzip",
+                "user-agent":     "Truecaller/11.75.5 (Android;10)",
+                "clientsecret":   "lvc22mp3l1sfv6ujg83rd17btt",
             },
             timeout=10
         )
@@ -614,13 +629,22 @@ def truecaller_verify():
         phone = "+216" + phone.lstrip("0")
 
     try:
+        from phonenumbers import parse as _parse_phone
+        pn = _parse_phone(phone, None)
         r = _req.post(
-            "https://account.truecaller.com/api/v1/registration/verifyOtp",
-            json={"phoneNumber": phone, "countryCode": "TN", "otp": otp},
+            "https://account-asia-south1.truecaller.com/v1/verifyOnboardingOtp",
+            json={
+                "countryCode": "TN",
+                "dialingCode": 216,
+                "phoneNumber": str(pn.national_number),
+                "requestId":   body.get("requestId", ""),
+                "token":       otp,
+            },
             headers={
-                "Content-Type":  "application/json",
-                "User-Agent":    "Truecaller/11.75.5 (Android)",
-                "clientId":      "4",
+                "content-type":   "application/json; charset=UTF-8",
+                "accept-encoding": "gzip",
+                "user-agent":     "Truecaller/11.75.5 (Android;10)",
+                "clientsecret":   "lvc22mp3l1sfv6ujg83rd17btt",
             },
             timeout=10
         )
@@ -630,8 +654,8 @@ def truecaller_verify():
         except Exception:
             pass
 
-        token = (body_json.get("token") or body_json.get("access_token") or
-                 body_json.get("accessToken") or "")
+        token = (body_json.get("installationId") or body_json.get("token") or
+                 body_json.get("access_token") or body_json.get("accessToken") or "")
         return jsonify({
             "status":    r.status_code,
             "token":     token,

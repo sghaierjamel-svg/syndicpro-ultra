@@ -450,14 +450,17 @@ def src_truecaller_query(query: str, country: str = "TN") -> dict:
     r = {"phones": [], "emails": [], "websites": []}
     try:
         resp = requests.get(
-            "https://search.truecaller.com/v2/search",
+            "https://search5-noneu.truecaller.com/v2/search",
             params={"q": query, "countryCode": country,
-                    "type": "4", "encoding": "json"},
+                    "type": "4", "locAddr": "",
+                    "placement": "SEARCHRESULTS,HISTORY,DETAILS",
+                    "encoding": "json"},
             headers={
                 "Authorization":  f"Bearer {token}",
-                "Content-Type":   "application/json; charset=UTF-8",
-                "User-Agent":     "Truecaller/11.75.5 (Android)",
-                "clientId":       "4",
+                "content-type":   "application/json; charset=UTF-8",
+                "accept-encoding": "gzip",
+                "user-agent":     "Truecaller/11.75.5 (Android;10)",
+                "clientsecret":   "lvc22mp3l1sfv6ujg83rd17btt",
             },
             timeout=8
         )
