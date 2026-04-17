@@ -5,7 +5,7 @@ Nouveautés : enrichissement Excel asynchrone, cache, context générique.
 
 from flask import Flask, request, jsonify, send_file
 from flask_cors import CORS
-from scraper_engine import scrape_all, get_rne_candidates, src_truecaller_query
+from scraper_engine import scrape_all, get_rne_candidates, src_truecaller_query, _ar_to_latin, _is_arabic
 from scoring_engine import compute_conformity
 from db import (init_db, save, get_all, count_all, get_stats, delete_all,
                 seed_from_list, set_cache, job_create, job_update, job_get,
@@ -60,6 +60,10 @@ def scrape():
         result["city"] = city
         if from_cache:
             result["from_cache"] = True
+        # Ajouter translittération latine pour chaque membre arabe
+        for m in result.get("members", []):
+            if _is_arabic(m.get("nom", "")):
+                m["nom_latin"] = _ar_to_latin(m["nom"])
         save(result)
         # Mettre en cache si des contacts ont été trouvés
         if result.get("found") or result.get("president"):
@@ -83,6 +87,19 @@ def rne_candidates():
         return jsonify({"candidates": candidates})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
+
+# ── Cache invalidation ────────────────────────────────────────────────────────
+
+@app.route("/cache/invalidate", methods=["POST"])
+def cache_invalidate():
+    body = request.get_json(silent=True) or {}
+    name = (body.get("name") or "").strip()
+    city = (body.get("city") or "").strip()
+    if name and city:
+        invalidate_cache(name, city)
+        return jsonify({"ok": True})
+    return jsonify({"error": "name + city requis"}), 400
 
 
 # ── Stats ──────────────────────────────────────────────────────────────────────

@@ -558,6 +558,78 @@ code { background: var(--gray-100); padding: .1em .35em; border-radius: 4px; fon
   font-weight: 500;
 }
 
+/* ── Copy button ── */
+.btn-copy {
+  background: none;
+  border: 1px solid var(--gray-200);
+  border-radius: 4px;
+  padding: .1rem .35rem;
+  cursor: pointer;
+  font-size: .75rem;
+  line-height: 1;
+  transition: background .15s;
+}
+.btn-copy:hover { background: var(--primary-lt); border-color: var(--primary); }
+
+/* ── Members section ── */
+.members-section { margin-bottom: .75rem; }
+.members-title {
+  font-size: .82rem;
+  font-weight: 700;
+  color: var(--gray-600);
+  text-transform: uppercase;
+  letter-spacing: .04em;
+  margin-bottom: .5rem;
+}
+.members-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: .5rem;
+}
+.member-card {
+  border-radius: var(--radius-sm);
+  padding: .65rem .85rem;
+  border: 1px solid var(--gray-200);
+  background: var(--gray-50);
+}
+.member-card.role-president {
+  background: #eff6ff;
+  border-color: #93c5fd;
+}
+.member-card.role-tresorier {
+  background: #fef9c3;
+  border-color: #fde047;
+}
+.member-role {
+  font-size: .72rem;
+  font-weight: 700;
+  color: var(--gray-400);
+  text-transform: uppercase;
+  letter-spacing: .03em;
+  margin-bottom: .15rem;
+}
+.member-name {
+  font-size: .95rem;
+  font-weight: 600;
+  color: var(--gray-800);
+}
+.member-name-latin {
+  font-size: .8rem;
+  color: var(--gray-600);
+  font-style: italic;
+}
+.address-row {
+  font-size: .85rem;
+  color: var(--gray-600);
+  margin-bottom: .5rem;
+  padding: .5rem 0;
+}
+.extras-row {
+  font-size: .82rem;
+  color: var(--gray-600);
+  margin-bottom: .25rem;
+}
+
 /* ── Cache badge ── */
 .cache-badge {
   display: inline-flex;

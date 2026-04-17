@@ -207,26 +207,60 @@ function renderResult(data) {
     sourcesRow.innerHTML = '';
   }
 
-  // Tous les contacts (dépliables)
+  // Membres RNE — section dédiée avec cartes
   const allRow = document.getElementById('allContactsRow');
-  const extras = [];
-  if (data.all_phones && data.all_phones.length > 1)
-    extras.push(`<strong>Tous les téléphones :</strong> ${data.all_phones.join(' · ')}`);
-  if (data.all_emails && data.all_emails.length > 1)
-    extras.push(`<strong>Tous les emails :</strong> ${data.all_emails.join(' · ')}`);
+  let html = '';
+
   if (data.members && data.members.length) {
-    const membersHtml = data.members
-      .map(m => `<span style="margin-right:.8rem">${m.qualite} : <strong>${m.nom}</strong></span>`)
-      .join('');
-    extras.push(`<strong>Membres (RNE) :</strong><br><span style="font-size:.85rem">${membersHtml}</span>`);
+    html += '<div class="members-section"><div class="members-title">Bureau de la copropriété (RNE)</div><div class="members-grid">';
+    for (const m of data.members) {
+      const roleClass = m.qualite === 'Président' ? 'role-president' :
+                         m.qualite === 'Trésorier' ? 'role-tresorier' : 'role-other';
+      const roleIcon = m.qualite === 'Président' ? '\u{1F451}' :
+                       m.qualite === 'Secrétaire Général' ? '\u{1F4DD}' :
+                       m.qualite === 'Trésorier' ? '\u{1F4B0}' : '\u{1F464}';
+      html += `<div class="member-card ${roleClass}">
+        <div class="member-role">${roleIcon} ${escHtmlSimple(m.qualite)}</div>
+        <div class="member-name">${escHtmlSimple(m.nom)}</div>
+        ${m.nom_ar && m.nom_ar !== m.nom ? `<div class="member-name-latin">${escHtmlSimple(m.nom_latin || '')}</div>` : ''}
+      </div>`;
+    }
+    html += '</div></div>';
   } else if (data.president) {
-    extras.push(`<strong>Responsable (RNE) :</strong> ${data.president}`);
+    html += `<div class="members-section"><div class="members-title">Responsable (RNE)</div>
+      <div class="member-card role-president"><div class="member-role">\u{1F451} Président</div>
+      <div class="member-name">${escHtmlSimple(data.president)}</div></div></div>`;
   }
-  if (data.address)
-    extras.push(`<strong>Adresse (RNE) :</strong> ${data.address}`);
-  if (extras.length) {
-    allRow.innerHTML = extras.join('<br>');
+
+  if (data.address) {
+    html += `<div class="address-row"><strong>\u{1F4CD} Adresse officielle :</strong> ${escHtmlSimple(data.address)}</div>`;
+  }
+
+  if (data.all_phones && data.all_phones.length > 1)
+    html += `<div class="extras-row"><strong>Tous les téléphones :</strong> ${data.all_phones.join(' · ')}</div>`;
+  if (data.all_emails && data.all_emails.length > 1)
+    html += `<div class="extras-row"><strong>Tous les emails :</strong> ${data.all_emails.join(' · ')}</div>`;
+
+  // Bouton relancer sans cache
+  if (data.from_cache) {
+    html += `<div style="margin-top:.75rem"><button class="btn-secondary" id="retryNoCache">Relancer sans cache</button></div>`;
+  }
+
+  if (html) {
+    allRow.innerHTML = html;
     allRow.classList.remove('hidden');
+    // Bind retry button
+    const retryBtn = document.getElementById('retryNoCache');
+    if (retryBtn) {
+      retryBtn.addEventListener('click', async () => {
+        await fetch(API + '/cache/invalidate', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name: data.name, city: data.city })
+        });
+        doScrape(data.name, data.city, '', data.rne_id_found || '');
+      });
+    }
   } else {
     allRow.classList.add('hidden');
   }
@@ -243,15 +277,31 @@ function contactItem(label, value, href, subtext) {
   const valueEl = document.createElement('div');
   valueEl.className = 'contact-value';
   if (value) {
+    const wrapper = document.createElement('span');
+    wrapper.style.cssText = 'display:flex;align-items:center;gap:.4rem';
     if (href) {
       const a = document.createElement('a');
       a.href = href;
       a.target = '_blank';
       a.textContent = value;
-      valueEl.appendChild(a);
+      wrapper.appendChild(a);
     } else {
-      valueEl.textContent = value;
+      const t = document.createElement('span');
+      t.textContent = value;
+      wrapper.appendChild(t);
     }
+    const copyBtn = document.createElement('button');
+    copyBtn.className = 'btn-copy';
+    copyBtn.title = 'Copier';
+    copyBtn.textContent = '\u{1F4CB}';
+    copyBtn.addEventListener('click', () => {
+      navigator.clipboard.writeText(value).then(() => {
+        copyBtn.textContent = '\u2705';
+        setTimeout(() => { copyBtn.textContent = '\u{1F4CB}'; }, 1200);
+      });
+    });
+    wrapper.appendChild(copyBtn);
+    valueEl.appendChild(wrapper);
     if (subtext) {
       const sub = document.createElement('div');
       sub.style.cssText = 'font-size:.72rem;color:#94a3b8;margin-top:.2rem;font-weight:400';

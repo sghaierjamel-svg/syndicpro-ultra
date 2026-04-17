@@ -507,6 +507,22 @@ def src_11880(name, city, short, context=""):
     return r, "11880"
 
 
+def src_mubawab(name, city, short, context=""):
+    """Mubawab.tn — portail immobilier, contacts des agences et syndics."""
+    r  = {"phones": [], "emails": [], "websites": []}
+    sp, se = set(), set()
+    for q in [short, f"{short} {city}"]:
+        html = fetch(
+            f"https://www.mubawab.tn/fr/ct/recherche?q={quote(q)}",
+            referer="https://www.mubawab.tn/", timeout=7
+        )
+        d = extract_data(html or "")
+        _merge(r, d, sp, se)
+        if r["phones"] or r["emails"]:
+            return r, "mubawab"
+    return r, "mubawab"
+
+
 def src_tayara(name, city, short, context=""):
     """Tayara.tn — annonces immobilières mentionnent souvent le contact du syndic."""
     r  = {"phones": [], "emails": [], "websites": []}
@@ -921,12 +937,13 @@ def scrape_all(name: str, city: str, rne_id: str = "", context: str = "") -> lis
         "rne_borne":    lambda: src_rne_borne(name, city, sn, rne_id),
         "crawler":      lambda: src_contact_crawler(name, city, sn, context),
         "11880":        lambda: src_11880(name, city, sn, context),
+        "mubawab":      lambda: src_mubawab(name, city, sn, context),
     }
 
     results      = []
     rne_borne_r  = None
 
-    with ThreadPoolExecutor(max_workers=15) as ex:
+    with ThreadPoolExecutor(max_workers=16) as ex:
         fmap = {ex.submit(fn): key for key, fn in phase1.items()}
         done, _ = wait(fmap.keys(), timeout=15, return_when=ALL_COMPLETED)
         for f in _:
