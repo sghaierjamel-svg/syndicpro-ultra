@@ -606,37 +606,96 @@ def src_rne_old(name, city, rne_id):
     return r, "rne"
 
 
+# Domaines évidents hors-sujet à ne jamais crawler (recettes, news, encyclopédies…)
+_CRAWLER_DOMAIN_BLACKLIST = {
+    '750g', 'marmiton', 'recettesparisiennes', 'cuisineaz', 'ptitchef',
+    'wikipedia', 'wikimedia', 'wikibooks', 'wikivoyage',
+    'lefigaro', 'lemonde', 'leparisien', 'franceinfo', 'bfmtv',
+    'amazon', 'ebay', 'aliexpress', 'cdiscount',
+    'tripadvisor', 'booking', 'airbnb', 'expedia',
+    'pinterest', 'tumblr', 'reddit', 'quora', 'medium',
+    'wordpress', 'blogspot', 'over-blog', 'wix', 'jimdo',
+    'youtube', 'dailymotion', 'vimeo',
+}
+
+# TLDs étrangers qu'on n'attend pas pour un syndic tunisien (sauf si extra_urls connu)
+_FOREIGN_TLDS = {'.fr', '.de', '.it', '.es', '.uk', '.co.uk', '.nl', '.be', '.ch'}
+
+
+def _is_relevant_domain(base_url: str, name: str, city: str, is_extra: bool = False) -> bool:
+    """Vérifie qu'un domaine est potentiellement celui de la société cherchée."""
+    parsed = urlparse(base_url)
+    host   = parsed.netloc.lower().replace('www.', '')
+    domain = host.split('.')[0]
+
+    # Blacklist évidente
+    if domain in _CRAWLER_DOMAIN_BLACKLIST:
+        return False
+
+    # Domaines déjà trouvés par d'autres sources → toujours pertinents
+    if is_extra:
+        return True
+
+    # TLD .tn → toujours pertinent
+    if host.endswith('.tn'):
+        return True
+
+    # TLD clairement étranger → rejeter
+    for tld in _FOREIGN_TLDS:
+        if host.endswith(tld):
+            return False
+
+    # Vérifier que le domaine contient au moins un mot du nom ou de la ville
+    name_words  = set(re.sub(r'[^a-z ]', '', _deaccent(name).lower()).split()) - {'de','la','le','les','des','du','al','el'}
+    city_clean  = _deaccent(city).lower()
+    domain_norm = _deaccent(domain).lower()
+
+    if city_clean and city_clean[:4] in domain_norm:
+        return True
+    if any(w and len(w) > 3 and w in domain_norm for w in name_words):
+        return True
+
+    # .com/.net sans correspondance → doute → accepter quand même (le scorer tranchera)
+    return True
+
+
 def src_contact_crawler(name, city, short, context="", extra_urls=None):
     """
-    Crawl contact — trouve les URLs de la société et visite /contact, /a-propos, etc.
-    extra_urls : liste de domaines déjà trouvés par d'autres sources (websites).
+    Crawl contact — visite les pages /contact des domaines trouvés.
+    Budget temps global : 12s. Max 3 domaines × 3 chemins.
     """
     ctx = f" {context}" if context else ""
-    html = fetch(f"https://lite.duckduckgo.com/lite/?q={quote(short + ' ' + city + ctx)}", retries=1)
+    html = fetch(f"https://lite.duckduckgo.com/lite/?q={quote(short + ' ' + city + ctx)}", retries=0)
     urls = _extract_result_urls(html)
     if not urls:
         urls = _extract_result_urls(
-            fetch(f"https://lite.duckduckgo.com/lite/?q={quote(name + ' ' + city)}", retries=1)
+            fetch(f"https://lite.duckduckgo.com/lite/?q={quote(name + ' ' + city)}", retries=0)
         )
 
-    # Ajouter les sites déjà découverts par d'autres sources (re-crawl direct)
+    # Sites déjà découverts (prioritaires — on les insère en tête)
     if extra_urls:
         for eu in extra_urls[:3]:
             base = eu if eu.startswith("http") else f"https://{eu}"
             if base not in urls:
                 urls.insert(0, base)
 
-    r    = {"phones": [], "emails": [], "websites": []}
-    seen = set()
+    # Filtrer les domaines non pertinents (sauf extra_urls)
+    extra_set = set(extra_urls or [])
+    urls = [u for u in urls if _is_relevant_domain(u, name, city, is_extra=(u in extra_set))]
 
-    contact_paths = [
-        '/contact', '/nous-contacter', '/contactez-nous',
-        '/coordonnees', '/a-propos', '/about', '/',
-    ]
+    r         = {"phones": [], "emails": [], "websites": []}
+    seen      = set()
+    t_start   = time.time()
 
-    for base_url in urls[:5]:
+    contact_paths = ['/contact', '/nous-contacter', '/']
+
+    for base_url in urls[:3]:    # max 3 domaines
+        if time.time() - t_start > 12:   # budget global 12s
+            break
         for path in contact_paths:
-            page = fetch(base_url + path, timeout=8, referer=base_url, retries=1)
+            if time.time() - t_start > 12:
+                break
+            page = fetch(base_url + path, timeout=6, referer=base_url, retries=0)
             if not page:
                 continue
             d = extract_data(page)
@@ -648,9 +707,9 @@ def src_contact_crawler(name, city, short, context="", extra_urls=None):
                 if e not in seen:
                     seen.add(e); r["emails"].append(e)
             if d["phones"] or d["emails"]:
-                break   # on a trouvé sur ce domaine, passer au suivant
+                break
         if r["phones"] or r["emails"]:
-            break       # un seul domaine suffit si on a déjà des contacts
+            break
 
     return r, "crawler"
 

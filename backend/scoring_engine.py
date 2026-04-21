@@ -120,6 +120,17 @@ def compute_conformity(results):
 
         return best, round(raw, 1)
 
+    # Filtrer les emails de domaines étrangers sans rapport (recettes, news…)
+    _EMAIL_DOMAIN_BLACKLIST = {
+        '750g.com', 'marmiton.org', 'recettesparisiennes.com', 'cuisineaz.com',
+        'lefigaro.fr', 'lemonde.fr', 'leparisien.fr', 'wikipedia.org',
+        'gmail.com', 'yahoo.fr', 'hotmail.fr', 'outlook.com',
+    }
+    email_count = {e: v for e, v in email_count.items()
+                   if e.split('@')[-1] not in _EMAIL_DOMAIN_BLACKLIST}
+    email_sources = {e: v for e, v in email_sources.items()
+                     if e.split('@')[-1] not in _EMAIL_DOMAIN_BLACKLIST}
+
     phone,   p_conf = _best_score(phone_count,   phone_sources)
     email,   e_conf = _best_score(email_count,   email_sources)
     website, _      = _best_score(website_count, {})
