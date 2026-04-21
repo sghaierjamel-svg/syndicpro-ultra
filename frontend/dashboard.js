@@ -1,4 +1,4 @@
-/* ── SyndicPro Scanner — dashboard.js v8 ── */
+/* ── SyndicPro Scanner — dashboard.js v9 ── */
 
 const API      = '';
 const PAGE_SZ  = 50;
@@ -6,7 +6,10 @@ let   currentOffset    = 0;
 let   currentFilter    = 'all';
 let   currentMinConf   = 0;
 let   totalCount       = 0;
-let   allRows          = [];   // rows from last fetch (for client-side conf filter)
+let   allRows          = [];   // rows from last fetch (for client-side filters)
+let   searchQuery      = '';
+let   sortCol          = null;  // 'name' | 'city' | 'confidence' | 'date'
+let   sortDir          = 'asc'; // 'asc' | 'desc'
 
 /* ── Init ── */
 loadStats();
@@ -20,6 +23,31 @@ document.getElementById('filterSelect').addEventListener('change', (e) => {
 document.getElementById('confFilter').addEventListener('change', (e) => {
   currentMinConf = parseInt(e.target.value, 10) || 0;
   renderRows();
+});
+
+const tableSearch = document.getElementById('tableSearch');
+if (tableSearch) {
+  tableSearch.addEventListener('input', (e) => {
+    searchQuery = e.target.value.trim().toLowerCase();
+    renderRows();
+  });
+}
+
+/* sortable headers */
+document.querySelectorAll('th[data-sort]').forEach(th => {
+  th.style.cursor = 'pointer';
+  th.addEventListener('click', () => {
+    const col = th.dataset.sort;
+    if (sortCol === col) {
+      sortDir = sortDir === 'asc' ? 'desc' : 'asc';
+    } else {
+      sortCol = col;
+      sortDir = 'asc';
+    }
+    document.querySelectorAll('th[data-sort]').forEach(h => h.classList.remove('sorted-asc', 'sorted-desc'));
+    th.classList.add(sortDir === 'asc' ? 'sorted-asc' : 'sorted-desc');
+    renderRows();
+  });
 });
 
 document.getElementById('refreshBtn').addEventListener('click', () => {
@@ -75,7 +103,27 @@ async function loadResults(offset) {
 
 function renderRows() {
   const body = document.getElementById('resultsBody');
-  const rows = allRows.filter(r => (r.confidence || 0) >= currentMinConf);
+  let rows = allRows.filter(r => (r.confidence || 0) >= currentMinConf);
+
+  if (searchQuery) {
+    rows = rows.filter(r =>
+      [r.name, r.city, r.email, r.phone].some(v =>
+        v && v.toLowerCase().includes(searchQuery)
+      )
+    );
+  }
+
+  if (sortCol) {
+    rows = [...rows].sort((a, b) => {
+      let av, bv;
+      if (sortCol === 'confidence') { av = a.confidence || 0; bv = b.confidence || 0; }
+      else if (sortCol === 'date')  { av = a.created_at || ''; bv = b.created_at || ''; }
+      else                          { av = (a[sortCol] || '').toLowerCase(); bv = (b[sortCol] || '').toLowerCase(); }
+      if (av < bv) return sortDir === 'asc' ? -1 : 1;
+      if (av > bv) return sortDir === 'asc' ? 1 : -1;
+      return 0;
+    });
+  }
 
   document.getElementById('countLabel').textContent =
     `${rows.length} résultat(s) affiché(s) sur ${totalCount}`;

@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>SyndicPro Scanner — Recherche de contacts syndics</title>
-  <link rel="stylesheet" href="style.css?v=10">
+  <link rel="stylesheet" href="style.css?v=11">
   <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🔍</text></svg>">
 </head>
 <body>
@@ -64,6 +64,12 @@
           <span id="searchBtnSpinner" class="spinner hidden"></span>
         </button>
       </form>
+
+      <!-- Historique récent -->
+      <div id="recentSearches" class="recent-searches" style="display:none;margin-top:1rem;padding-top:1rem;border-top:1px solid var(--border)">
+        <div class="recent-label">🕐 Recherches récentes</div>
+        <div class="recent-chips" id="recentChips"></div>
+      </div>
     </div>
 
     <!-- Bannière cold start -->
@@ -169,12 +175,12 @@
       <div id="enrichProgress" class="enrich-info hidden">
         <div style="display:flex;align-items:center;gap:.75rem;margin-bottom:.5rem">
           <div class="spinner-large"></div>
-          <span id="enrichProgText" style="font-size:.9rem;color:#1e40af">Démarrage…</span>
+          <span id="enrichProgText" style="font-size:.88rem;color:var(--text-muted)">Démarrage…</span>
         </div>
-        <div style="background:#e2e8f0;border-radius:8px;height:10px;overflow:hidden">
-          <div id="enrichProgBar" style="height:100%;width:0%;background:var(--primary);transition:width .4s ease;border-radius:8px"></div>
+        <div class="progress-wrap">
+          <div id="enrichProgBar" class="progress-fill" style="width:0%"></div>
         </div>
-        <p style="font-size:.8rem;color:#64748b;margin-top:.4rem">Le traitement continue en arrière-plan — vous pouvez fermer l'onglet, mais restez sur cette page pour télécharger le résultat.</p>
+        <p style="font-size:.78rem;color:var(--text-dim);margin-top:.4rem">Traitement en arrière-plan — restez sur cette page pour télécharger le résultat.</p>
       </div>
 
       <div id="enrichError" class="alert-error hidden"></div>

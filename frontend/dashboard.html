@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>SyndicPro Scanner — Tableau de bord</title>
-  <link rel="stylesheet" href="style.css?v=9">
+  <link rel="stylesheet" href="style.css?v=11">
   <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📊</text></svg>">
   <style>
     /* ── Tabs ── */
@@ -84,21 +84,22 @@
     <!-- Toolbar -->
     <div class="card" style="padding:1rem 1.5rem">
       <div class="results-toolbar">
+        <input type="search" class="table-search" id="tableSearch" placeholder="🔍 Rechercher dans les résultats…">
         <select class="filter-select" id="filterSelect">
-          <option value="all">Tous les résultats</option>
-          <option value="found">Contacts trouvés seulement</option>
+          <option value="all">Tous</option>
+          <option value="found">Trouvés seulement</option>
         </select>
-        <select class="filter-select" id="confFilter" style="width:160px">
-          <option value="0">Toutes confiances</option>
-          <option value="30">Confiance ≥ 30%</option>
-          <option value="50">Confiance ≥ 50%</option>
-          <option value="70">Confiance ≥ 70%</option>
+        <select class="filter-select" id="confFilter" style="width:140px">
+          <option value="0">Toute confiance</option>
+          <option value="30">≥ 30%</option>
+          <option value="50">≥ 50%</option>
+          <option value="70">≥ 70%</option>
         </select>
         <a href="/export/csv" class="btn-secondary">⬇ CSV</a>
         <a href="/export/excel" class="btn-secondary" id="exportExcelBtn">⬇ Excel</a>
-        <button class="btn-secondary" id="refreshBtn" title="Actualiser">↻ Actualiser</button>
-        <button class="btn-danger" id="clearBtn">🗑 Vider</button>
-        <span style="margin-left:auto;font-size:.8rem;color:#94a3b8" id="countLabel"></span>
+        <button class="btn-secondary" id="refreshBtn" title="Actualiser">↻</button>
+        <button class="btn-danger" id="clearBtn">🗑</button>
+        <span style="margin-left:auto;font-size:.78rem;color:var(--text-dim)" id="countLabel"></span>
       </div>
     </div>
 
@@ -109,14 +110,14 @@
           <thead>
             <tr>
               <th>#</th>
-              <th>Résidence</th>
-              <th>Ville</th>
+              <th data-sort="name">Résidence</th>
+              <th data-sort="city">Ville</th>
               <th>Téléphone</th>
-              <th>Email</th>
+              <th data-sort="email">Email</th>
               <th>Président / Gérant</th>
-              <th>Confiance</th>
+              <th data-sort="confidence">Confiance</th>
               <th>Statut</th>
-              <th>Date</th>
+              <th data-sort="date">Date</th>
               <th>Actions</th>
             </tr>
           </thead>

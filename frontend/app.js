@@ -1,6 +1,110 @@
-/* ── SyndicPro Scanner — app.js ── */
+/* ── SyndicPro Scanner — app.js v10 ── */
 
-const API = '';  // même origine (Flask sert le frontend et l'API)
+const API = '';
+
+// ── Toasts ────────────────────────────────────────────────────────────────────
+(function() {
+  const wrap = document.createElement('div');
+  wrap.className = 'toast-container';
+  document.body.appendChild(wrap);
+  window.toast = function(msg, type = 'info', dur = 2800) {
+    const icons = { success:'✅', error:'❌', info:'ℹ️' };
+    const t = document.createElement('div');
+    t.className = `toast ${type}`;
+    t.innerHTML = `<span>${icons[type]||''}</span><span>${msg}</span>`;
+    wrap.appendChild(t);
+    setTimeout(() => t.remove(), dur);
+  };
+})();
+
+// ── Autocomplete villes ───────────────────────────────────────────────────────
+const VILLES_TN = [
+  'Ariana','Béja','Ben Arous','Bizerte','Gabès','Gafsa','Jendouba',
+  'Kairouan','Kasserine','Kébili','Kef','Mahdia','Manouba','Médenine',
+  'Monastir','Nabeul','Sfax','Sidi Bouzid','Siliana','Sousse','Tataouine',
+  'Tozeur','Tunis','Zaghouan',
+  // Villes populaires
+  'Hammam-Lif','La Marsa','La Soukra','Lac','Ennasr','Menzah','Ghazela',
+  'Borj Louzir','Raoued','Kalâat Landlous','Hammam Sousse','Akouda',
+  'Msaken','Enfidha','Hammamet','Yasminette','El Mourouj','Ben Arous',
+  'Radès','Mégrine','Ezzahra','Hrairia','Fouchana',
+];
+
+function setupCityAutocomplete() {
+  const input = document.getElementById('inputCity');
+  if (!input) return;
+
+  let list = null;
+
+  input.addEventListener('input', () => {
+    const q = input.value.trim().toLowerCase();
+    removeList();
+    if (!q || q.length < 1) return;
+    const matches = VILLES_TN.filter(v => v.toLowerCase().includes(q)).slice(0, 6);
+    if (!matches.length) return;
+
+    list = document.createElement('div');
+    list.className = 'autocomplete-list';
+    matches.forEach((v, i) => {
+      const item = document.createElement('div');
+      item.className = 'autocomplete-item' + (i === 0 ? ' active' : '');
+      item.textContent = v;
+      item.addEventListener('mousedown', (e) => { e.preventDefault(); input.value = v; removeList(); });
+      list.appendChild(item);
+    });
+    input.parentElement.style.position = 'relative';
+    input.parentElement.appendChild(list);
+  });
+
+  input.addEventListener('keydown', (e) => {
+    if (!list) return;
+    const items = list.querySelectorAll('.autocomplete-item');
+    let active = [...items].findIndex(el => el.classList.contains('active'));
+    if (e.key === 'ArrowDown') { e.preventDefault(); active = Math.min(active + 1, items.length - 1); }
+    else if (e.key === 'ArrowUp') { e.preventDefault(); active = Math.max(active - 1, 0); }
+    else if (e.key === 'Enter' && active >= 0) { e.preventDefault(); input.value = items[active].textContent; removeList(); return; }
+    else if (e.key === 'Escape') { removeList(); return; }
+    items.forEach((el, i) => el.classList.toggle('active', i === active));
+  });
+
+  document.addEventListener('click', (e) => { if (!input.contains(e.target)) removeList(); });
+
+  function removeList() { if (list) { list.remove(); list = null; } }
+}
+setupCityAutocomplete();
+
+// ── Historique récent ─────────────────────────────────────────────────────────
+const RECENT_KEY = 'scanner_recent';
+const MAX_RECENT = 5;
+
+function getRecent() {
+  try { return JSON.parse(localStorage.getItem(RECENT_KEY) || '[]'); } catch { return []; }
+}
+function addRecent(name, city) {
+  const items = getRecent().filter(r => !(r.name === name && r.city === city));
+  items.unshift({ name, city });
+  localStorage.setItem(RECENT_KEY, JSON.stringify(items.slice(0, MAX_RECENT)));
+  renderRecent();
+}
+function renderRecent() {
+  const wrap = document.getElementById('recentSearches');
+  if (!wrap) return;
+  const items = getRecent();
+  if (!items.length) { wrap.style.display = 'none'; return; }
+  wrap.style.display = 'block';
+  const chips = document.getElementById('recentChips');
+  chips.innerHTML = items.map(r =>
+    `<span class="recent-chip" data-name="${escHtmlSimple(r.name)}" data-city="${escHtmlSimple(r.city)}">${escHtmlSimple(r.name)} — ${escHtmlSimple(r.city)}</span>`
+  ).join('');
+  chips.querySelectorAll('.recent-chip').forEach(chip => {
+    chip.addEventListener('click', () => {
+      document.getElementById('inputName').value = chip.dataset.name;
+      document.getElementById('inputCity').value = chip.dataset.city;
+      document.getElementById('searchForm').dispatchEvent(new Event('submit'));
+    });
+  });
+}
+renderRecent();
 
 /* ── Onglets ── */
 document.querySelectorAll('.tab-btn').forEach(btn => {
@@ -112,6 +216,7 @@ async function doScrape(name, city, context, rne_id) {
     if (!res.ok) { showError(data.error || `Erreur serveur (${res.status})`); return; }
     hideCandidates();
     renderResult(data);
+    addRecent(name, city);
   } catch (err) {
     _stopColdTimer();
     showError(`Impossible de joindre le serveur : ${err.message}`);
@@ -296,8 +401,9 @@ function contactItem(label, value, href, subtext) {
     copyBtn.textContent = '\u{1F4CB}';
     copyBtn.addEventListener('click', () => {
       navigator.clipboard.writeText(value).then(() => {
-        copyBtn.textContent = '\u2705';
-        setTimeout(() => { copyBtn.textContent = '\u{1F4CB}'; }, 1200);
+        copyBtn.textContent = '✅';
+        toast('Copié !', 'success', 1500);
+        setTimeout(() => { copyBtn.textContent = '📋'; }, 1200);
       });
     });
     wrapper.appendChild(copyBtn);
@@ -483,10 +589,12 @@ enrichBtn.addEventListener('click', async () => {
     a.download = 'contacts_enrichis.xlsx';
     a.click();
     URL.revokeObjectURL(url);
+    toast('Fichier enrichi téléchargé !', 'success');
 
   } catch (err) {
     enrichErr.textContent = '⚠ ' + err.message;
     enrichErr.classList.remove('hidden');
+    toast('Erreur : ' + err.message, 'error');
   } finally {
     enrichText.textContent = 'Enrichir le fichier';
     enrichSpin.classList.add('hidden');
