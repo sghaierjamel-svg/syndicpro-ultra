@@ -33,7 +33,8 @@ RE_PHONE_INTL = re.compile(
 RE_PHONE_BARE = re.compile(r'(?<!\d)([2-9]\d{7})(?!\d)')
 _PHONE_CTX = re.compile(
     r'(?:tél?|gsm|mob|fixe|contact|phone|هاتف|رقم|numéro|appel|'
-    r'joindre|coordonnées|portable|ligne)',
+    r'joindre|coordonnées|portable|ligne|'
+    r'numTel|telSociete|telephoneSociete|numTelephone|telBureau|telFixe)',
     re.IGNORECASE | re.UNICODE
 )
 

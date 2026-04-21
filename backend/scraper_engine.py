@@ -848,6 +848,12 @@ def src_rne_entite(rne_id: str):
                 result["emails"].append(email)
                 logging.info(f"[RNE entite] {rne_id} → email: {email}")
 
+            # Extraction téléphone depuis le JSON brut (tous les champs possible)
+            raw_contacts = extract_data(r.text)
+            _merge(result, raw_contacts, set(result["phones"]), set(result["emails"]))
+            if raw_contacts.get("phones"):
+                logging.info(f"[RNE entite] {rne_id} → téléphone: {raw_contacts['phones']}")
+
     except Exception as e:
         logging.warning(f"[RNE entite] {rne_id}: {e}")
 
@@ -950,8 +956,16 @@ def src_rne_borne(name, city, short, rne_id=""):
     result["members"]   = unique_members
     result["president"] = unique_members[0]["nom"] if unique_members else ""
     result["address"]   = (det.get("adresse") or "").strip()
-    # Note : la recherche de contacts des membres est faite en Phase 2 (scrape_all)
-    # pour ne pas dépasser le timeout de la Phase 1.
+
+    # ── Extraction téléphone/email depuis le JSON brut ─────────────────────────
+    # On passe le JSON en texte à extract_data pour capturer tous les champs
+    # (telephone, telephoneSociete, numTelephone, telSociete, mobile, gsm…)
+    raw_contacts = extract_data(json.dumps(det))
+    sp_rne, se_rne = set(), set()
+    _merge(result, raw_contacts, sp_rne, se_rne)
+    if raw_contacts.get("phones"):
+        logging.info(f"[RNE borne] téléphone extrait du JSON: {raw_contacts['phones']}")
+
     return result, "rne_borne"
 
 
