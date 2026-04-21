@@ -1068,10 +1068,14 @@ def scrape_all(name: str, city: str, rne_id: str = "", context: str = "") -> lis
     results     = []
     rne_borne_r = None
 
-    with ThreadPoolExecutor(max_workers=15) as ex:
+    # IMPORTANT: on n'utilise PAS "with" pour éviter que __exit__ bloque
+    # jusqu'à ce que tous les threads terminent. shutdown(wait=False) laisse
+    # les threads tourner en arrière-plan et libère le fil principal immédiatement.
+    ex = ThreadPoolExecutor(max_workers=15)
+    try:
         fmap = {ex.submit(fn): key for key, fn in phase1.items()}
-        done, _ = wait(fmap.keys(), timeout=22, return_when=ALL_COMPLETED)
-        for f in _:
+        done, not_done = wait(fmap.keys(), timeout=22, return_when=ALL_COMPLETED)
+        for f in not_done:
             f.cancel()
         for future in done:
             try:
@@ -1083,6 +1087,8 @@ def scrape_all(name: str, city: str, rne_id: str = "", context: str = "") -> lis
                         rne_borne_r = data
             except Exception:
                 pass
+    finally:
+        ex.shutdown(wait=False)
 
     # ── Vérification sortie anticipée ───────────────────────────────────────────
     # Si Phase 1 a déjà trouvé téléphone + email → Phase 1.5 inutile (skip crawler)
@@ -1123,10 +1129,11 @@ def scrape_all(name: str, city: str, rne_id: str = "", context: str = "") -> lis
         # On a le téléphone mais pas l'email — rne_entite seul vaut le coup
         phase15_tasks["rne_entite"] = lambda: src_rne_entite(effective_rne_id)
 
-    with ThreadPoolExecutor(max_workers=2) as ex15:
+    ex15 = ThreadPoolExecutor(max_workers=2)
+    try:
         fmap15 = {ex15.submit(fn): key for key, fn in phase15_tasks.items()}
-        done15, _ = wait(fmap15.keys(), timeout=18, return_when=ALL_COMPLETED)
-        for f in _:
+        done15, not_done15 = wait(fmap15.keys(), timeout=18, return_when=ALL_COMPLETED)
+        for f in not_done15:
             f.cancel()
         for future in done15:
             try:
@@ -1138,6 +1145,8 @@ def scrape_all(name: str, city: str, rne_id: str = "", context: str = "") -> lis
                         logging.info(f"[Phase 1.5] rne_entite → {data['emails']}")
             except Exception as e:
                 logging.warning(f"[Phase 1.5] {e}")
+    finally:
+        ex15.shutdown(wait=False)
 
     # ── Phase 2 : recherche personnelle des membres RNE ─────────────────────────
     if not _skip_p2 and rne_borne_r and rne_borne_r.get("members"):
@@ -1156,19 +1165,21 @@ def scrape_all(name: str, city: str, rne_id: str = "", context: str = "") -> lis
             )
 
         if phase2_tasks:
-            with ThreadPoolExecutor(max_workers=len(phase2_tasks)) as ex2:
+            ex2 = ThreadPoolExecutor(max_workers=len(phase2_tasks))
+            try:
                 fmap2 = {ex2.submit(fn): key for key, fn in phase2_tasks.items()}
-                done2, _ = wait(fmap2.keys(), timeout=20, return_when=ALL_COMPLETED)
-                for f in _:
+                done2, not_done2 = wait(fmap2.keys(), timeout=20, return_when=ALL_COMPLETED)
+                for f in not_done2:
                     f.cancel()
                 for future in done2:
                     try:
                         data, source = future.result(timeout=1)
-                        # Toujours inclure (même vide) pour le debug — le scoring les ignorera
                         data["source"] = source
                         results.append(data)
                     except Exception:
                         pass
+            finally:
+                ex2.shutdown(wait=False)
 
     return results
 
@@ -1182,16 +1193,21 @@ def scrape_rne_only(rne_id: str, name: str, city: str) -> list:
     sn = short_name(name)
     results = []
 
-    with ThreadPoolExecutor(max_workers=2) as ex:
-        f_borne  = ex.submit(src_rne_borne,  name, city, sn, rne_id)
-        f_entite = ex.submit(src_rne_entite, rne_id)
-        for f, src_label in [(f_borne, "rne_borne"), (f_entite, "rne_entite")]:
-            try:
-                data, _ = f.result(timeout=10)
-                data["source"] = src_label
-                results.append(data)
-            except Exception as e:
-                logging.warning(f"[scrape_rne_only] {src_label}: {e}")
+    ex = ThreadPoolExecutor(max_workers=2)
+    try:
+      f_borne  = ex.submit(src_rne_borne,  name, city, sn, rne_id)
+      f_entite = ex.submit(src_rne_entite, rne_id)
+      done_rne, _ = wait([f_borne, f_entite], timeout=10, return_when=ALL_COMPLETED)
+      for f, src_label in [(f_borne, "rne_borne"), (f_entite, "rne_entite")]:
+            if f in done_rne:
+                try:
+                    data, _ = f.result(timeout=1)
+                    data["source"] = src_label
+                    results.append(data)
+                except Exception as e:
+                    logging.warning(f"[scrape_rne_only] {src_label}: {e}")
+    finally:
+        ex.shutdown(wait=False)
 
     return results
 
@@ -1303,7 +1319,8 @@ def _src_member_personal(nom: str, city: str, denom_latin: str, qualite: str = "
         return out
 
     # Lancer les 5 sources en parallèle — budget total 8s
-    with ThreadPoolExecutor(max_workers=5) as pool:
+    pool = ThreadPoolExecutor(max_workers=5)
+    try:
         futures = {
             pool.submit(_ddg):         "ddg",
             pool.submit(_bing):        "bing",
@@ -1311,14 +1328,16 @@ def _src_member_personal(nom: str, city: str, denom_latin: str, qualite: str = "
             pool.submit(_facebook):    "facebook",
             pool.submit(_truecaller):  "truecaller",
         }
-        done_m, _ = wait(futures.keys(), timeout=8, return_when=ALL_COMPLETED)
-        for f in _:
+        done_m, not_done_m = wait(futures.keys(), timeout=8, return_when=ALL_COMPLETED)
+        for f in not_done_m:
             f.cancel()
         for fut in done_m:
             try:
                 _merge(r, fut.result(timeout=1), sp, se)
             except Exception:
                 pass
+    finally:
+        pool.shutdown(wait=False)
 
     r["noms_cherches"] = noms   # pour le debug
     return r, "member_contact"
