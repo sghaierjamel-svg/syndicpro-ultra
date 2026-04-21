@@ -1,12 +1,35 @@
 """
-Moteur de scoring — confiance basée sur la répétition inter-sources v2
-Corrections :
-  - global_conf ne pénalise plus l'absence d'email si un téléphone est trouvé
-  - bonus progressif par nombre de sources concordantes
-  - sources haute confiance (RNE, facebook, crawler) boostent le score
+Moteur de scoring — confiance basée sur la répétition inter-sources v3
+Améliorations :
+  - Votes pondérés par source (RNE=5, annuaires=3, DDG/Bing=1, Tayara=0.5)
+  - Évite les faux positifs : un numéro DDG/Bing ne peut pas l'emporter sur RNE
+  - Seuil minimum de poids pour afficher un résultat
 """
 
 HIGH_TRUST_SOURCES = {"rne_borne", "rne_entite", "rne", "pagesjaunes", "yellow_tn", "crawler", "facebook", "11880", "truecaller", "mubawab"}
+
+# Poids de vote par source — plus élevé = plus fiable
+SOURCE_WEIGHTS = {
+    "rne_borne":      5.0,
+    "rne_entite":     5.0,
+    "rne":            4.0,
+    "pagesjaunes":    3.0,
+    "yellow_tn":      3.0,
+    "11880":          3.0,
+    "truecaller":     3.0,
+    "mubawab":        2.5,
+    "crawler":        2.0,
+    "facebook":       2.0,
+    "google_maps":    1.5,
+    "member_contact": 1.5,
+    "ddg":            1.0,
+    "bing":           1.0,
+    "google":         1.0,
+    "arabic":         0.8,
+    "linkedin":       0.8,
+    "annuaires":      0.5,
+    "tayara":         0.3,
+}
 
 
 def compute_conformity(results):
@@ -37,13 +60,15 @@ def compute_conformity(results):
         src      = r.get("source", "?")
         has_data = False
 
+        w = SOURCE_WEIGHTS.get(src, 1.0)
+
         for p in r.get("phones", []):
-            phone_count[p]  = phone_count.get(p, 0) + 1
+            phone_count[p]  = phone_count.get(p, 0) + w
             phone_sources.setdefault(p, set()).add(src)
             has_data = True
 
         for e in r.get("emails", []):
-            email_count[e]  = email_count.get(e, 0) + 1
+            email_count[e]  = email_count.get(e, 0) + w
             email_sources.setdefault(e, set()).add(src)
             has_data = True
 

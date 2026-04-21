@@ -94,7 +94,7 @@ def extract_data(html: str) -> dict:
     for tag in soup(['script', 'style', 'noscript', 'meta', 'link', 'head']):
         tag.decompose()
 
-    # ── 1. Liens tel: (source la plus fiable) ────────────────────────────────
+    # ── 1. Liens tel: + wa.me + WhatsApp (sources directes, très fiables) ───────
     tel_phones: list[str] = []
     for a in soup.find_all('a', href=True):
         href = a['href']
@@ -103,6 +103,18 @@ def extract_data(html: str) -> dict:
             n   = normalize_phone(raw)
             if n:
                 tel_phones.append(n)
+        elif 'wa.me/' in href:
+            m = re.search(r'wa\.me/(\d{8,15})', href)
+            if m:
+                n = normalize_phone(m.group(1))
+                if n and n not in tel_phones:
+                    tel_phones.append(n)
+        elif 'whatsapp.com' in href:
+            m = re.search(r'[?&]phone=(\d{8,15})', href)
+            if m:
+                n = normalize_phone(m.group(1))
+                if n and n not in tel_phones:
+                    tel_phones.append(n)
 
     text = soup.get_text(" ", strip=True)
 

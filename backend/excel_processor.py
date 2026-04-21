@@ -1,13 +1,12 @@
 """
-Enrichissement Excel — v4
+Enrichissement Excel — v5
 Améliorations majeures :
-  - Traitement parallèle (3 syndics simultanément → 3× plus rapide)
+  - Mode rapide RNE : quand ID RNE disponible, appel direct RNE (3-5s) avant full scraping
+  - Fallback automatique vers scrape_all si RNE ne donne rien
+  - Traitement parallèle (5 workers RNE-only, 3 workers full scraping)
   - Colonne Statut (✅ / ❌ / ⚠️)
   - Skip automatique des lignes déjà enrichies
-  - Sauvegarde intermédiaire tous les 10 traitements (anti-plantage)
-  - Colonne Durée (debug)
-  - Retry interne si scraping vide au premier essai
-  - Meilleure gestion des erreurs et logs
+  - Sauvegarde intermédiaire tous les 10 traitements
 """
 
 import io
@@ -18,7 +17,7 @@ import threading
 import openpyxl
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from openpyxl.styles import PatternFill, Font, Alignment
-from scraper_engine import scrape_all
+from scraper_engine import scrape_all, scrape_rne_only
 from scoring_engine import compute_conformity
 
 logger = logging.getLogger("excel_processor")
@@ -30,7 +29,8 @@ COLOR_NOTFOUND= "FFF8E1"   # orange très clair
 COLOR_ERROR   = "FFEBEE"   # rouge très clair
 COLOR_SKIP    = "F5F5F5"   # gris clair
 
-PARALLEL_WORKERS = 3          # syndics traités simultanément
+PARALLEL_WORKERS     = 3      # workers full scraping
+PARALLEL_WORKERS_RNE = 6      # workers mode rapide RNE (endpoints légers)
 SAVE_EVERY       = 10         # sauvegarde intermédiaire toutes les N lignes
 SLEEP_BETWEEN    = 0.5        # secondes entre chaque ligne (politesse serveurs)
 
@@ -141,7 +141,15 @@ def enrich_excel(file_obj, progress_callback=None, context=""):
     save_counter = 0
     done_lock   = threading.Lock()
 
-    def process_row(row_num):
+    # Séparer les lignes avec/sans ID RNE pour optimiser le traitement
+    rows_with_rne    = [r for r in data_rows if rne_col and str(ws.cell(r, rne_col).value or "").strip()]
+    rows_without_rne = [r for r in data_rows if r not in rows_with_rne]
+    has_rne_batch    = bool(rows_with_rne)
+
+    if has_rne_batch:
+        logger.info(f"[Excel] {len(rows_with_rne)} lignes avec ID RNE (mode rapide) + {len(rows_without_rne)} sans ID")
+
+    def process_row(row_num, rne_fast=False):
         """Traite une ligne et retourne un dict de résultats."""
         name   = str(ws.cell(row_num, name_col).value or "").strip()
         city   = str(ws.cell(row_num, city_col).value or "").strip()
@@ -150,10 +158,21 @@ def enrich_excel(file_obj, progress_callback=None, context=""):
         t0     = time.time()
 
         try:
-            raw  = scrape_all(name, city, rne_id=rne_id, context=ctx)
-            data = compute_conformity(raw)
+            if rne_fast and rne_id:
+                # Mode rapide : RNE seul en premier (~3-6s)
+                raw  = scrape_rne_only(rne_id, name, city)
+                data = compute_conformity(raw)
 
-            # Si rien trouvé et pas de RNE : retry sans contexte
+                # Si RNE ne donne rien d'utile, fallback vers scrape_all complet
+                if not data.get("phone") and not data.get("email"):
+                    logger.info(f"[RNE fast] Rien trouvé via RNE → fallback full scraping pour {name}")
+                    raw  = scrape_all(name, city, rne_id=rne_id, context=ctx)
+                    data = compute_conformity(raw)
+            else:
+                raw  = scrape_all(name, city, rne_id=rne_id, context=ctx)
+                data = compute_conformity(raw)
+
+            # Si toujours rien et contexte actif : retry sans contexte
             if not data.get("found") and not data.get("president") and ctx:
                 logger.info(f"[Retry] {name} ({city}) — retry sans contexte")
                 raw  = scrape_all(name, city, rne_id=rne_id, context="")
@@ -211,28 +230,32 @@ def enrich_excel(file_obj, progress_callback=None, context=""):
             ws.cell(row_num, dur_col,     dur)
             _color_row(ws, row_num, ws.max_column, color)
 
-    # Traitement par batches de PARALLEL_WORKERS
-    with ThreadPoolExecutor(max_workers=PARALLEL_WORKERS) as executor:
-        futures = {executor.submit(process_row, rn): rn for rn in data_rows}
+    def _run_batch(row_list, workers, rne_fast=False):
+        nonlocal done_count, save_counter
+        with ThreadPoolExecutor(max_workers=workers) as executor:
+            futures = {executor.submit(process_row, rn, rne_fast): rn for rn in row_list}
+            for future in as_completed(futures):
+                res = future.result()
+                write_result(res)
+                with done_lock:
+                    done_count  += 1
+                    save_counter += 1
+                    current = done_count
+                if progress_callback:
+                    progress_callback(current, total)
+                if save_counter >= SAVE_EVERY:
+                    save_counter = 0
+                    logger.info(f"[Excel] Sauvegarde intermédiaire ({current}/{total})")
+                time.sleep(SLEEP_BETWEEN)
 
-        for future in as_completed(futures):
-            res = future.result()
-            write_result(res)
+    # Traitement : d'abord mode rapide RNE, ensuite lignes sans RNE
+    if rows_with_rne:
+        logger.info(f"[Excel] Passe 1 — mode rapide RNE ({PARALLEL_WORKERS_RNE} workers)")
+        _run_batch(rows_with_rne, PARALLEL_WORKERS_RNE, rne_fast=True)
 
-            with done_lock:
-                done_count  += 1
-                save_counter += 1
-                current = done_count
-
-            if progress_callback:
-                progress_callback(current, total)
-
-            # Sauvegarde intermédiaire anti-plantage
-            if save_counter >= SAVE_EVERY:
-                save_counter = 0
-                logger.info(f"[Excel] Sauvegarde intermédiaire ({current}/{total})")
-
-            time.sleep(SLEEP_BETWEEN)
+    if rows_without_rne:
+        logger.info(f"[Excel] Passe 2 — full scraping ({PARALLEL_WORKERS} workers)")
+        _run_batch(rows_without_rne, PARALLEL_WORKERS, rne_fast=False)
 
     # ── Ajustement largeur colonnes ───────────────────────────────────────────
     for col in ws.columns:

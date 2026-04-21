@@ -1,5 +1,5 @@
 """
-SyndicPro Scanner — Moteur de scraping ULTIME v4
+SyndicPro Scanner — Moteur de scraping ULTIME v5
 ────────────────────────────────────────────────
 Sources Phase 1 (parallèles) :
   DDG · Bing · Facebook Mobile · Google · Arabe · PJ.tn · Yellow.tn
@@ -1025,9 +1025,23 @@ def scrape_all(name: str, city: str, rne_id: str = "", context: str = "") -> lis
             except Exception:
                 pass
 
+    # ── Vérification sortie anticipée ───────────────────────────────────────────
+    # Si Phase 1 a déjà trouvé téléphone + email → Phase 1.5 inutile (skip crawler)
+    # Si une source haute confiance a trouvé un téléphone → Phase 2 inutile
+    _HIGH_TRUST = {"rne_borne", "rne_entite", "rne", "pagesjaunes", "yellow_tn",
+                   "11880", "truecaller", "mubawab", "crawler", "facebook"}
+    _p1_phones = [p for r in results for p in r.get("phones", [])]
+    _p1_emails = [e for r in results for e in r.get("emails", [])]
+    _p1_high_trust_phone = any(
+        r.get("source") in _HIGH_TRUST and r.get("phones") for r in results
+    )
+    _skip_p15 = bool(_p1_phones and _p1_emails)   # phone+email déjà trouvés
+    _skip_p2  = _p1_high_trust_phone               # source fiable → pas besoin membres
+
+    if _skip_p15:
+        logging.info(f"[scrape_all] Sortie anticipée Phase 1.5 — phone+email trouvés en Phase 1")
+
     # ── Phase 1.5 : RNE entite + crawler avec sites déjà collectés ──────────────
-    # Le crawler tourne ici pour bénéficier des sites web trouvés en Phase 1.
-    # Le RNE entite est toujours séquentiel (token OAuth2 peut être lent).
     collected_websites = []
     for r_item in results:
         collected_websites.extend(r_item.get("websites", []))
@@ -1039,12 +1053,16 @@ def scrape_all(name: str, city: str, rne_id: str = "", context: str = "") -> lis
             seen_w.add(w)
             extra_urls.append(w)
 
-    # Lancer crawler + rne_entite en parallèle
+    # Lancer crawler + rne_entite en parallèle (sauf si sortie anticipée)
     phase15_tasks = {}
     effective_rne_id = rne_id or (rne_borne_r.get("rne_id_found") if rne_borne_r else "")
-    if effective_rne_id:
+    if not _skip_p15:
+        if effective_rne_id:
+            phase15_tasks["rne_entite"] = lambda: src_rne_entite(effective_rne_id)
+        phase15_tasks["crawler"] = lambda: src_contact_crawler(name, city, sn, context, extra_urls=extra_urls)
+    elif effective_rne_id and not _p1_emails:
+        # On a le téléphone mais pas l'email — rne_entite seul vaut le coup
         phase15_tasks["rne_entite"] = lambda: src_rne_entite(effective_rne_id)
-    phase15_tasks["crawler"] = lambda: src_contact_crawler(name, city, sn, context, extra_urls=extra_urls)
 
     with ThreadPoolExecutor(max_workers=2) as ex15:
         fmap15 = {ex15.submit(fn): key for key, fn in phase15_tasks.items()}
@@ -1062,10 +1080,8 @@ def scrape_all(name: str, city: str, rne_id: str = "", context: str = "") -> lis
             except Exception as e:
                 logging.warning(f"[Phase 1.5] {e}")
 
-    # ── Phase 2 : recherche personnelle de TOUS les membres RNE ─────────────────
-    # Président, Secrétaire Général, Trésorier, Responsable, Représentant légal
-    # Chaque membre est cherché en parallèle sur DDG + Bing + Google + Facebook
-    if rne_borne_r and rne_borne_r.get("members"):
+    # ── Phase 2 : recherche personnelle des membres RNE ─────────────────────────
+    if not _skip_p2 and rne_borne_r and rne_borne_r.get("members"):
         members     = rne_borne_r["members"]
         denom_latin = rne_borne_r.get("denom_latin", sn)
 
@@ -1094,6 +1110,29 @@ def scrape_all(name: str, city: str, rne_id: str = "", context: str = "") -> lis
                         results.append(data)
                     except Exception:
                         pass
+
+    return results
+
+
+def scrape_rne_only(rne_id: str, name: str, city: str) -> list:
+    """
+    Mode rapide : appelle uniquement les 2 endpoints RNE en parallèle.
+    Utilisé pour l'enrichissement en masse quand l'ID RNE est connu.
+    Durée : ~3-6s vs ~35s pour scrape_all complet.
+    """
+    sn = short_name(name)
+    results = []
+
+    with ThreadPoolExecutor(max_workers=2) as ex:
+        f_borne  = ex.submit(src_rne_borne,  name, city, sn, rne_id)
+        f_entite = ex.submit(src_rne_entite, rne_id)
+        for f, src_label in [(f_borne, "rne_borne"), (f_entite, "rne_entite")]:
+            try:
+                data, _ = f.result(timeout=10)
+                data["source"] = src_label
+                results.append(data)
+            except Exception as e:
+                logging.warning(f"[scrape_rne_only] {src_label}: {e}")
 
     return results
 
