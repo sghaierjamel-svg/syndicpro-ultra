@@ -9,8 +9,10 @@ from scraper_engine import scrape_all, get_rne_candidates, src_truecaller_query,
 from scoring_engine import compute_conformity
 from db import (init_db, save, get_all, count_all, get_stats, delete_all,
                 seed_from_list, set_cache, job_create, job_update, job_get,
-                get_result, update_result, invalidate_cache)
+                get_result, update_result, invalidate_cache, get_email_contacts)
 from excel_processor import enrich_excel
+from email_agent import (TEMPLATES, build_email, send_email,
+                         start_campaign, get_campaign_status)
 import os
 import io
 import csv
@@ -704,6 +706,93 @@ def truecaller_test():
         "phones":       result.get("phones", []),
         "found":        bool(result.get("phones")),
     })
+
+
+# ── Agent Email ───────────────────────────────────────────────────────────────
+
+@app.route("/email/templates")
+def email_templates():
+    """Liste les templates disponibles."""
+    result = [{"id": k, "name": v["name"], "subject": v["subject"]}
+              for k, v in TEMPLATES.items()]
+    return jsonify({"templates": result})
+
+
+@app.route("/email/preview", methods=["POST"])
+def email_preview():
+    """Retourne un aperçu HTML du template pour un contact donné."""
+    body        = request.get_json(silent=True) or {}
+    template_id = body.get("template_id", "prospection")
+    contact     = body.get("contact", {"name": "Résidence El Yasmine", "city": "Tunis"})
+    try:
+        subject, html = build_email(template_id, contact)
+        return jsonify({"subject": subject, "html": html})
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+
+
+@app.route("/email/send/<int:row_id>", methods=["POST"])
+def email_send_one(row_id):
+    """Envoie un email à un contact spécifique."""
+    if not check_key():
+        return jsonify({"error": "Clé API invalide"}), 401
+
+    row = get_result(row_id)
+    if not row:
+        return jsonify({"error": "Contact introuvable"}), 404
+
+    to_email = row.get("email", "").strip()
+    if not to_email:
+        return jsonify({"error": "Ce contact n'a pas d'email"}), 400
+
+    body        = request.get_json(silent=True) or {}
+    template_id = body.get("template_id", "prospection")
+    try:
+        subject, html = build_email(template_id, row)
+        ok = send_email(to_email, subject, html)
+        if ok:
+            update_result(row_id, email_sent=1, email_sent_at="", email_template=template_id, email_status="sent")
+            return jsonify({"status": "sent", "to": to_email})
+        return jsonify({"error": "Échec envoi (vérifiez la config RESEND/SMTP)"}), 500
+    except Exception as e:
+        app.logger.error(f"[email_send] {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/email/campaign/start", methods=["POST"])
+def email_campaign_start():
+    """Démarre une campagne email sur tous les contacts avec email."""
+    if not check_key():
+        return jsonify({"error": "Clé API invalide"}), 401
+
+    body          = request.get_json(silent=True) or {}
+    template_id   = body.get("template_id", "prospection")
+    only_unsent   = body.get("only_unsent", True)
+    min_confidence= float(body.get("min_confidence", 0))
+
+    contacts = get_email_contacts(only_unsent=only_unsent, min_confidence=min_confidence)
+    if not contacts:
+        return jsonify({"error": "Aucun contact éligible"}), 400
+
+    result = start_campaign(contacts, template_id)
+    if "error" in result:
+        return jsonify(result), 409
+    return jsonify(result)
+
+
+@app.route("/email/campaign/status")
+def email_campaign_status():
+    """Retourne l'état de la campagne en cours."""
+    return jsonify(get_campaign_status())
+
+
+@app.route("/email/contacts")
+def email_contacts_list():
+    """Retourne les contacts éligibles à l'envoi email."""
+    only_unsent    = request.args.get("only_unsent", "1") == "1"
+    min_confidence = float(request.args.get("min_confidence", 0))
+    contacts = get_email_contacts(only_unsent=only_unsent, min_confidence=min_confidence)
+    return jsonify({"contacts": contacts, "count": len(contacts)})
 
 
 # ── Pages frontend ─────────────────────────────────────────────────────────────

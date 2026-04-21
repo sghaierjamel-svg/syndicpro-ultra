@@ -47,25 +47,41 @@ NOISE_DOMAINS = {
 
 # Préfixes à retirer du nom pour obtenir le nom court
 SHORT_NAME_PREFIXES = [
-    # Syndics
-    'SYNDIC RESIDENTIEL', 'SYNDICAT DES RESIDENTS DE LA',
+    # Syndics — du plus long au plus court (important pour le matching)
+    'SYNDIC DES COPROPRIETAIRES DE LA RESIDENCE',
+    'SYNDIC DES COPROPRIETAIRES DE LA',
+    'SYNDIC DES COPROPRIETAIRES',
+    'SYNDIC RESIDENTIEL',
     'SYNDICAT DES COPROPRIETAIRES DE LA RESIDENCE',
     'SYNDICAT DES COPROPRIETAIRES DE LA',
     'SYNDICAT DES COPROPRIETAIRES',
-    'SYNDICAT DES RESIDENTS', 'SYNDICAT DES PROPRIETAIRES',
-    'SYNDICAT DE COPROPRIETE', 'SYNDICAT DE LA RESIDENCE',
-    'SYNDIC DE LA RESIDENCE', 'SYNDIC DE RESIDENCE',
-    'NIQABAT MUTASAKINI IQAMAT', 'NIQABAT MALIKI IQAMAT',
+    'SYNDICAT DES RESIDENTS DE LA RESIDENCE',
+    'SYNDICAT DES RESIDENTS DE LA',
+    'SYNDICAT DES RESIDENTS',
+    'SYNDICAT DES PROPRIETAIRES DE LA RESIDENCE',
+    'SYNDICAT DES PROPRIETAIRES',
+    'SYNDICAT DE COPROPRIETE DE LA RESIDENCE',
+    'SYNDICAT DE COPROPRIETE',
+    'SYNDICAT DE LA RESIDENCE',
+    'SYNDIC DE LA RESIDENCE',
+    'SYNDIC DE RESIDENCE',
+    'NIQABAT MUTASAKINI IQAMAT',
+    'NIQABAT MALIKI IQAMAT',
     # Sociétés
-    'SOCIETE A RESPONSABILITE LIMITEE', 'SOCIETE ANONYME',
-    'SOCIETE IMMOBILIERE', 'SOCIETE DE GESTION',
+    'SOCIETE A RESPONSABILITE LIMITEE',
+    'SOCIETE ANONYME',
+    'SOCIETE IMMOBILIERE',
+    'SOCIETE DE GESTION',
     'SOCIETE BOCHRA SYNDIC',
-    'ENTREPRISE INDIVIDUELLE', 'ETABLISSEMENT',
+    'ENTREPRISE INDIVIDUELLE',
+    'ETABLISSEMENT',
     # Abréviations
     'SARL', 'EURL', 'SAS', 'SA ', 'STE ', 'SOC ',
     # Associations
-    'ASSOCIATION DES RESIDENTS', 'ASSOCIATION DE',
-    # Génériques
+    'ASSOCIATION DES RESIDENTS DE LA RESIDENCE',
+    'ASSOCIATION DES RESIDENTS',
+    'ASSOCIATION DE',
+    # Génériques (en dernier — très courts, ne retirer que si seul préfixe)
     'SOCIETE', 'SYNDIC', 'SYNDICAT', 'RESIDENCE', 'ASSOCIATION',
     'CABINET', 'CLINIQUE', 'HOTEL', 'RESTAURANT', 'AGENCE',
     'ECOLE', 'INSTITUT', 'CENTRE',
@@ -208,19 +224,30 @@ def _headers(referer=None):
     return h
 
 
-def fetch(url: str, timeout=6, retries=0, referer=None) -> str:
+def fetch(url: str, timeout=8, retries=2, referer=None) -> str:
+    """
+    Fetch avec retries et backoff exponentiel.
+    Par défaut : 2 retries, délai 1s → 2s entre les tentatives.
+    """
     for attempt in range(retries + 1):
         try:
             r = requests.get(url, headers=_headers(referer),
                              timeout=timeout, allow_redirects=True)
             if r.status_code == 200:
                 return r.text
-            if r.status_code in (429, 503):
-                import time as _t; _t.sleep(1.5)
-            elif r.status_code in (403, 404, 410):
-                return ""
+            if r.status_code in (429, 503, 502):
+                wait = 1.5 * (2 ** attempt)
+                logging.debug(f"[fetch] {r.status_code} — attente {wait:.1f}s ({url[:60]})")
+                time.sleep(wait)
+            elif r.status_code in (403, 404, 410, 400):
+                return ""   # inutile de réessayer
+        except requests.exceptions.Timeout:
+            logging.debug(f"[fetch] Timeout attempt {attempt+1} — {url[:60]}")
+            if attempt < retries:
+                time.sleep(1.0)
         except Exception:
-            pass
+            if attempt < retries:
+                time.sleep(0.5)
     return ""
 
 
@@ -276,8 +303,10 @@ def src_ddg(name, city, short, context=""):
         f"{name} {city} téléphone",
         f"{short} {city} email",
     ]:
-        d = extract_data(fetch(f"https://lite.duckduckgo.com/lite/?q={quote(q)}"))
+        d = extract_data(fetch(f"https://lite.duckduckgo.com/lite/?q={quote(q)}", retries=1))
         _merge(r, d, sp, se)
+        if r["phones"] or r["emails"]:   # arrêt anticipé si déjà trouvé
+            break
     return r, "ddg"
 
 
@@ -293,9 +322,11 @@ def src_bing(name, city, short, context=""):
     ]:
         d = extract_data(fetch(
             f"https://www.bing.com/search?q={quote(q)}&cc=TN&setlang=fr",
-            referer="https://www.bing.com/"
+            referer="https://www.bing.com/", retries=1
         ))
         _merge(r, d, sp, se)
+        if r["phones"] or r["emails"]:   # arrêt anticipé
+            break
     return r, "bing"
 
 
@@ -347,10 +378,13 @@ def src_google(name, city, short, context=""):
         try:
             resp = requests.get(
                 f"https://www.google.com/search?q={quote(q)}&hl=fr&gl=tn&num=10",
-                headers=_headers("https://www.google.com/"), timeout=8
+                headers=_headers("https://www.google.com/"), timeout=8,
+                allow_redirects=True
             )
             if resp.status_code == 200:
                 _merge(r, extract_data(resp.text), sp, se)
+            elif resp.status_code == 429:
+                time.sleep(2)
         except Exception:
             pass
         if r["phones"] or r["emails"]:
@@ -367,8 +401,10 @@ def src_arabic(name, city, short, context=""):
         f"{name} {city} تونس هاتف بريد",
         f"{short} تونس هاتف",
     ]:
-        d = extract_data(fetch(f"https://lite.duckduckgo.com/lite/?q={quote(q)}"))
+        d = extract_data(fetch(f"https://lite.duckduckgo.com/lite/?q={quote(q)}", retries=1))
         _merge(r, d, sp, se)
+        if r["phones"] or r["emails"]:
+            break
     return r, "arabic"
 
 
@@ -570,22 +606,37 @@ def src_rne_old(name, city, rne_id):
     return r, "rne"
 
 
-def src_contact_crawler(name, city, short, context=""):
+def src_contact_crawler(name, city, short, context="", extra_urls=None):
     """
     Crawl contact — trouve les URLs de la société et visite /contact, /a-propos, etc.
+    extra_urls : liste de domaines déjà trouvés par d'autres sources (websites).
     """
     ctx = f" {context}" if context else ""
-    html = fetch(f"https://lite.duckduckgo.com/lite/?q={quote(short + ' ' + city + ctx)}")
-    urls = _extract_result_urls(html) or \
-           _extract_result_urls(fetch(f"https://lite.duckduckgo.com/lite/?q={quote(name + ' ' + city)}"))
+    html = fetch(f"https://lite.duckduckgo.com/lite/?q={quote(short + ' ' + city + ctx)}", retries=1)
+    urls = _extract_result_urls(html)
+    if not urls:
+        urls = _extract_result_urls(
+            fetch(f"https://lite.duckduckgo.com/lite/?q={quote(name + ' ' + city)}", retries=1)
+        )
 
-    r   = {"phones": [], "emails": [], "websites": []}
+    # Ajouter les sites déjà découverts par d'autres sources (re-crawl direct)
+    if extra_urls:
+        for eu in extra_urls[:3]:
+            base = eu if eu.startswith("http") else f"https://{eu}"
+            if base not in urls:
+                urls.insert(0, base)
+
+    r    = {"phones": [], "emails": [], "websites": []}
     seen = set()
 
+    contact_paths = [
+        '/contact', '/nous-contacter', '/contactez-nous',
+        '/coordonnees', '/a-propos', '/about', '/',
+    ]
+
     for base_url in urls[:5]:
-        for path in ['/contact', '/nous-contacter', '/contactez-nous',
-                     '/coordonnees', '/a-propos', '/about', '/']:
-            page = fetch(base_url + path, timeout=7, referer=base_url)
+        for path in contact_paths:
+            page = fetch(base_url + path, timeout=8, referer=base_url, retries=1)
             if not page:
                 continue
             d = extract_data(page)
@@ -597,7 +648,9 @@ def src_contact_crawler(name, city, short, context=""):
                 if e not in seen:
                     seen.add(e); r["emails"].append(e)
             if d["phones"] or d["emails"]:
-                break
+                break   # on a trouvé sur ce domaine, passer au suivant
+        if r["phones"] or r["emails"]:
+            break       # un seul domaine suffit si on a déjà des contacts
 
     return r, "crawler"
 
@@ -920,32 +973,31 @@ def scrape_all(name: str, city: str, rne_id: str = "", context: str = "") -> lis
 
     sn = short_name(name)
 
-    # ── Phase 1 : toutes sources en parallèle ────────────────────────────────
+    # ── Phase 1 : sources rapides en parallèle (sans crawler) ───────────────────
     phase1 = {
-        "ddg":       lambda: src_ddg(name, city, sn, context),
-        "bing":      lambda: src_bing(name, city, sn, context),
-        "facebook":  lambda: src_facebook_mobile(name, city, sn, context),
-        "google":    lambda: src_google(name, city, sn, context),
-        "arabic":    lambda: src_arabic(name, city, sn, context),
-        "pj_tn":     lambda: src_pj_tn(name, city, sn, context),
-        "yellow_tn": lambda: src_yellow_tn(name, city, sn, context),
-        "annuaires": lambda: src_annuaire(name, city, sn, context),
+        "ddg":          lambda: src_ddg(name, city, sn, context),
+        "bing":         lambda: src_bing(name, city, sn, context),
+        "facebook":     lambda: src_facebook_mobile(name, city, sn, context),
+        "google":       lambda: src_google(name, city, sn, context),
+        "arabic":       lambda: src_arabic(name, city, sn, context),
+        "pj_tn":        lambda: src_pj_tn(name, city, sn, context),
+        "yellow_tn":    lambda: src_yellow_tn(name, city, sn, context),
+        "annuaires":    lambda: src_annuaire(name, city, sn, context),
         "linkedin":     lambda: src_linkedin(name, city, sn, context),
         "google_maps":  lambda: src_google_maps(name, city, sn, context),
         "tayara":       lambda: src_tayara(name, city, sn, context),
         "rne_old":      lambda: src_rne_old(name, city, rne_id),
         "rne_borne":    lambda: src_rne_borne(name, city, sn, rne_id),
-        "crawler":      lambda: src_contact_crawler(name, city, sn, context),
         "11880":        lambda: src_11880(name, city, sn, context),
         "mubawab":      lambda: src_mubawab(name, city, sn, context),
     }
 
-    results      = []
-    rne_borne_r  = None
+    results     = []
+    rne_borne_r = None
 
-    with ThreadPoolExecutor(max_workers=16) as ex:
+    with ThreadPoolExecutor(max_workers=15) as ex:
         fmap = {ex.submit(fn): key for key, fn in phase1.items()}
-        done, _ = wait(fmap.keys(), timeout=15, return_when=ALL_COMPLETED)
+        done, _ = wait(fmap.keys(), timeout=22, return_when=ALL_COMPLETED)
         for f in _:
             f.cancel()
         for future in done:
@@ -959,19 +1011,42 @@ def scrape_all(name: str, city: str, rne_id: str = "", context: str = "") -> lis
             except Exception:
                 pass
 
-    # ── Phase 1.5 : RNE entite (email officiel) — toujours séquentiel ────────────
-    # Sorti de Phase 1 car le token OAuth2 + la requête HTTP dépassaient le timeout
-    # de 20s quand le serveur RNE est lent. Ici pas de timeout — garanti d'exécuter.
+    # ── Phase 1.5 : RNE entite + crawler avec sites déjà collectés ──────────────
+    # Le crawler tourne ici pour bénéficier des sites web trouvés en Phase 1.
+    # Le RNE entite est toujours séquentiel (token OAuth2 peut être lent).
+    collected_websites = []
+    for r_item in results:
+        collected_websites.extend(r_item.get("websites", []))
+    # Dédupliquer
+    seen_w = set()
+    extra_urls = []
+    for w in collected_websites:
+        if w not in seen_w:
+            seen_w.add(w)
+            extra_urls.append(w)
+
+    # Lancer crawler + rne_entite en parallèle
+    phase15_tasks = {}
     effective_rne_id = rne_id or (rne_borne_r.get("rne_id_found") if rne_borne_r else "")
     if effective_rne_id:
-        try:
-            entite_data, entite_src = src_rne_entite(effective_rne_id)
-            if entite_data.get("emails"):
-                entite_data["source"] = entite_src
-                results.append(entite_data)
-                logging.info(f"[Phase 1.5] rne_entite → {entite_data['emails']}")
-        except Exception as e:
-            logging.warning(f"[Phase 1.5] rne_entite échoué : {e}")
+        phase15_tasks["rne_entite"] = lambda: src_rne_entite(effective_rne_id)
+    phase15_tasks["crawler"] = lambda: src_contact_crawler(name, city, sn, context, extra_urls=extra_urls)
+
+    with ThreadPoolExecutor(max_workers=2) as ex15:
+        fmap15 = {ex15.submit(fn): key for key, fn in phase15_tasks.items()}
+        done15, _ = wait(fmap15.keys(), timeout=18, return_when=ALL_COMPLETED)
+        for f in _:
+            f.cancel()
+        for future in done15:
+            try:
+                data, source = future.result(timeout=1)
+                if data:
+                    data["source"] = source
+                    results.append(data)
+                    if source == "rne_entite" and data.get("emails"):
+                        logging.info(f"[Phase 1.5] rne_entite → {data['emails']}")
+            except Exception as e:
+                logging.warning(f"[Phase 1.5] {e}")
 
     # ── Phase 2 : recherche personnelle de TOUS les membres RNE ─────────────────
     # Président, Secrétaire Général, Trésorier, Responsable, Représentant légal
@@ -994,7 +1069,7 @@ def scrape_all(name: str, city: str, rne_id: str = "", context: str = "") -> lis
         if phase2_tasks:
             with ThreadPoolExecutor(max_workers=len(phase2_tasks)) as ex2:
                 fmap2 = {ex2.submit(fn): key for key, fn in phase2_tasks.items()}
-                done2, _ = wait(fmap2.keys(), timeout=15, return_when=ALL_COMPLETED)
+                done2, _ = wait(fmap2.keys(), timeout=20, return_when=ALL_COMPLETED)
                 for f in _:
                     f.cancel()
                 for future in done2:

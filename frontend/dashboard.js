@@ -42,10 +42,14 @@ document.getElementById('clearBtn').addEventListener('click', async () => {
 async function loadStats() {
   try {
     const data = await (await fetch(API + '/stats')).json();
-    document.getElementById('statTotal').textContent = data.total ?? '—';
-    document.getElementById('statFound').textContent = data.found ?? '—';
-    document.getElementById('statRate').textContent  = (data.success_rate ?? '—') + '%';
-    document.getElementById('statConf').textContent  = (data.avg_confidence ?? '—') + '%';
+    document.getElementById('statTotal').textContent     = data.total ?? '—';
+    document.getElementById('statFound').textContent     = data.found ?? '—';
+    document.getElementById('statRate').textContent      = (data.success_rate ?? '—') + '%';
+    document.getElementById('statConf').textContent      = (data.avg_confidence ?? '—') + '%';
+    const we = document.getElementById('statWithEmail');
+    const em = document.getElementById('statEmailed');
+    if (we) we.textContent = data.with_email ?? '—';
+    if (em) em.textContent = data.emailed ?? '—';
   } catch (e) { console.error('Stats error:', e); }
 }
 

@@ -14,21 +14,26 @@ DB_PATH = os.environ.get("DB_PATH", "data.db")
 
 # ── Colonnes attendues avec leur définition ALTER TABLE ───────────────────────
 COLUMN_DEFS = {
-    "phone":       "TEXT    DEFAULT ''",
-    "email":       "TEXT    DEFAULT ''",
-    "website":     "TEXT    DEFAULT ''",
-    "all_phones":  "TEXT    DEFAULT ''",
-    "all_emails":  "TEXT    DEFAULT ''",
-    "sources_hit": "TEXT    DEFAULT ''",
-    "confidence":  "REAL    DEFAULT 0",
-    "found":       "INTEGER DEFAULT 0",
-    "rne_id":      "TEXT    DEFAULT ''",
-    "president":   "TEXT    DEFAULT ''",
-    "members":     "TEXT    DEFAULT ''",
-    "address":     "TEXT    DEFAULT ''",
-    "created_at":  "TEXT    DEFAULT '1970-01-01 00:00:00'",
-    "verified":    "INTEGER DEFAULT 0",
-    "notes":       "TEXT    DEFAULT ''",
+    "phone":          "TEXT    DEFAULT ''",
+    "email":          "TEXT    DEFAULT ''",
+    "website":        "TEXT    DEFAULT ''",
+    "all_phones":     "TEXT    DEFAULT ''",
+    "all_emails":     "TEXT    DEFAULT ''",
+    "sources_hit":    "TEXT    DEFAULT ''",
+    "confidence":     "REAL    DEFAULT 0",
+    "found":          "INTEGER DEFAULT 0",
+    "rne_id":         "TEXT    DEFAULT ''",
+    "president":      "TEXT    DEFAULT ''",
+    "members":        "TEXT    DEFAULT ''",
+    "address":        "TEXT    DEFAULT ''",
+    "created_at":     "TEXT    DEFAULT '1970-01-01 00:00:00'",
+    "verified":       "INTEGER DEFAULT 0",
+    "notes":          "TEXT    DEFAULT ''",
+    # Email agent columns
+    "email_sent":     "INTEGER DEFAULT 0",
+    "email_sent_at":  "TEXT    DEFAULT ''",
+    "email_template": "TEXT    DEFAULT ''",
+    "email_status":   "TEXT    DEFAULT ''",
 }
 REQUIRED_COLUMNS = {"id", "name", "city"} | set(COLUMN_DEFS.keys())
 
@@ -330,11 +335,13 @@ def count_all(only_found=False):
 
 
 def get_stats():
-    conn     = get_conn()
-    c        = conn.cursor()
-    total    = c.execute("SELECT COUNT(*) FROM results").fetchone()[0]
-    found    = c.execute("SELECT COUNT(*) FROM results WHERE found=1").fetchone()[0]
-    avg_conf = c.execute("SELECT AVG(confidence) FROM results WHERE found=1").fetchone()[0]
+    conn       = get_conn()
+    c          = conn.cursor()
+    total      = c.execute("SELECT COUNT(*) FROM results").fetchone()[0]
+    found      = c.execute("SELECT COUNT(*) FROM results WHERE found=1").fetchone()[0]
+    avg_conf   = c.execute("SELECT AVG(confidence) FROM results WHERE found=1").fetchone()[0]
+    with_email = c.execute("SELECT COUNT(*) FROM results WHERE email!=''").fetchone()[0]
+    emailed    = c.execute("SELECT COUNT(*) FROM results WHERE email_sent=1").fetchone()[0]
     conn.close()
     return {
         "total":          total,
@@ -342,7 +349,26 @@ def get_stats():
         "not_found":      total - found,
         "avg_confidence": round(avg_conf or 0, 1),
         "success_rate":   round((found / total * 100) if total else 0, 1),
+        "with_email":     with_email,
+        "emailed":        emailed,
     }
+
+
+def get_email_contacts(only_unsent=True, min_confidence=0):
+    """Retourne les contacts avec email, filtrés pour la campagne."""
+    conn = get_conn()
+    c    = conn.cursor()
+    q    = "SELECT * FROM results WHERE email != ''"
+    params = []
+    if only_unsent:
+        q += " AND (email_sent IS NULL OR email_sent=0)"
+    if min_confidence > 0:
+        q += " AND confidence >= ?"
+        params.append(min_confidence)
+    q += " ORDER BY confidence DESC"
+    rows = c.execute(q, params).fetchall()
+    conn.close()
+    return [_parse_row(r) for r in rows]
 
 
 def seed_from_list(syndics):
@@ -375,7 +401,8 @@ def update_result(row_id, **kwargs):
         return
     # Champs autorisés pour la mise à jour manuelle
     allowed = {"phone","email","website","all_phones","all_emails",
-               "president","address","notes","verified","confidence","found"}
+               "president","address","notes","verified","confidence","found",
+               "email_sent","email_sent_at","email_template","email_status"}
     filtered = {k: v for k, v in kwargs.items() if k in allowed}
     if not filtered:
         return
