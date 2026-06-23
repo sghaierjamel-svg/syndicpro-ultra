@@ -1,0 +1,504 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Prospects — SyndicPro Scanner</title>
+  <link rel="stylesheet" href="style.css?v=11">
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🎯</text></svg>">
+  <style>
+    /* ── KPI bar ── */
+    .kpi-bar {
+      display: flex; gap: .75rem; padding: 1.1rem 1.5rem;
+      background: var(--bg2); border-bottom: 1px solid var(--border);
+      overflow-x: auto;
+    }
+    .kpi {
+      background: var(--bg); border: 1px solid var(--border);
+      border-radius: var(--radius); padding: .7rem 1.2rem;
+      text-align: center; min-width: 120px; flex-shrink: 0;
+    }
+    .kpi .val { font-size: 1.6rem; font-weight: 800; color: var(--blue); line-height: 1; }
+    .kpi .lbl { font-size: .68rem; color: var(--text-dim); margin-top: .3rem; text-transform: uppercase; letter-spacing: .05em; font-weight: 600; }
+    .kpi.green .val { color: var(--green); }
+    .kpi.amber .val { color: var(--amber); }
+    .kpi.purple .val { color: #a78bfa; }
+
+    /* ── City pills ── */
+    .city-pills {
+      display: flex; gap: .4rem; flex-wrap: wrap;
+      padding: .7rem 1.5rem;
+      background: var(--bg2); border-bottom: 1px solid var(--border);
+    }
+    .city-pill {
+      padding: .22rem .75rem; border-radius: 99px; font-size: .75rem; font-weight: 600;
+      background: var(--bg3); color: var(--text-muted); border: 1px solid var(--border);
+      cursor: pointer; transition: .15s;
+    }
+    .city-pill:hover { border-color: var(--border-lt); color: var(--text); }
+    .city-pill.active { background: var(--blue-lt); color: var(--blue); border-color: rgba(59,130,246,.4); }
+
+    /* ── Toolbar ── */
+    .toolbar {
+      display: flex; align-items: center; gap: .6rem; flex-wrap: wrap;
+      padding: .75rem 1.5rem;
+      background: var(--bg); border-bottom: 1px solid var(--border);
+    }
+    .toolbar input[type=search] {
+      padding: .45rem .85rem; background: var(--bg3);
+      border: 1px solid var(--border); border-radius: var(--radius-sm);
+      font-size: .83rem; color: var(--text); outline: none; width: 220px;
+    }
+    .toolbar input[type=search]::placeholder { color: var(--text-dim); }
+    .toolbar input[type=search]:focus { border-color: var(--blue); }
+    .toolbar select {
+      padding: .45rem .75rem; background: var(--bg3);
+      border: 1px solid var(--border); border-radius: var(--radius-sm);
+      font-size: .83rem; color: var(--text); outline: none; cursor: pointer;
+    }
+    .toolbar select:focus { border-color: var(--blue); }
+    .spacer { flex: 1; }
+    #selCount { font-size: .78rem; color: var(--text-dim); min-width: 110px; text-align: right; }
+
+    .btn-sm {
+      padding: .42rem .95rem; border-radius: var(--radius-sm); border: none;
+      cursor: pointer; font-size: .82rem; font-weight: 600; transition: .15s; white-space: nowrap;
+    }
+    .btn-sm-primary  { background: var(--blue); color: #fff; }
+    .btn-sm-primary:hover  { background: var(--blue-dk); }
+    .btn-sm-primary:disabled { opacity: .4; cursor: not-allowed; }
+    .btn-sm-outline  { background: transparent; color: var(--text-muted); border: 1px solid var(--border); }
+    .btn-sm-outline:hover  { border-color: var(--border-lt); color: var(--text); }
+
+    /* ── Table wrapper ── */
+    .table-wrap { padding: 1.25rem 1.5rem 3rem; overflow-x: auto; }
+
+    table {
+      width: 100%; border-collapse: collapse;
+      background: var(--bg2); border: 1px solid var(--border);
+      border-radius: var(--radius); overflow: hidden;
+      box-shadow: var(--shadow-sm); min-width: 920px;
+    }
+    thead { background: var(--bg3); }
+    th {
+      padding: .65rem 1rem; text-align: left;
+      font-size: .72rem; font-weight: 700; color: var(--text-dim);
+      text-transform: uppercase; letter-spacing: .05em;
+      border-bottom: 1px solid var(--border); white-space: nowrap;
+    }
+    th.sortable { cursor: pointer; user-select: none; transition: color .15s; }
+    th.sortable:hover { color: var(--blue); }
+    th.sort-asc::after  { content: ' ↑'; color: var(--blue); }
+    th.sort-desc::after { content: ' ↓'; color: var(--blue); }
+
+    td {
+      padding: .6rem 1rem; font-size: .82rem;
+      border-bottom: 1px solid rgba(51,65,85,.5);
+      vertical-align: middle; color: var(--text);
+    }
+    tr:last-child td { border-bottom: none; }
+    tr:hover td { background: var(--bg3); }
+    tr.selected td { background: rgba(59,130,246,.07); }
+
+    td.td-check { width: 36px; padding: .5rem .5rem .5rem 1rem; }
+    input[type=checkbox] { width: 15px; height: 15px; cursor: pointer; accent-color: var(--blue); }
+
+    .name-cell strong { color: var(--text); }
+    .name-cell .sub { font-size: .72rem; color: var(--text-dim); margin-top: .1rem; }
+
+    a { color: var(--blue); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+
+    /* Score pill */
+    .score-pill {
+      display: inline-block; padding: .18rem .6rem; border-radius: 99px;
+      font-size: .75rem; font-weight: 700; min-width: 34px; text-align: center;
+    }
+    .score-high { background: var(--green-lt); color: var(--green); border: 1px solid rgba(16,185,129,.3); }
+    .score-mid  { background: var(--amber-lt);  color: var(--amber);  border: 1px solid rgba(245,158,11,.3); }
+    .score-low  { background: var(--red-lt);    color: #f87171;       border: 1px solid rgba(239,68,68,.2); }
+
+    /* Seq dots */
+    .seq-dots { display: inline-flex; gap: 3px; align-items: center; vertical-align: middle; }
+    .seq-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--border); }
+    .seq-dot.done   { background: var(--green); }
+    .seq-dot.active { background: var(--blue); }
+    .seq-label { font-size: .72rem; color: var(--text-dim); margin-left: 4px; }
+
+    /* Row action button */
+    .btn-row {
+      padding: .2rem .65rem; border-radius: var(--radius-xs); border: none;
+      cursor: pointer; font-size: .72rem; font-weight: 600; transition: .15s;
+    }
+    .btn-row-seq       { background: var(--blue-lt); color: var(--blue); border: 1px solid rgba(59,130,246,.3); }
+    .btn-row-seq:hover { background: var(--blue); color: #fff; }
+    .btn-row-done      { background: var(--green-lt); color: var(--green); border: 1px solid rgba(16,185,129,.3); cursor: default; }
+
+    /* Empty / loading */
+    .empty-state {
+      text-align: center; padding: 3rem 1rem;
+      color: var(--text-dim); font-size: .88rem;
+    }
+  </style>
+</head>
+<body>
+
+<!-- ── HEADER ── -->
+<header class="header">
+  <div class="header-inner">
+    <div class="brand">
+      <span class="brand-icon">🎯</span>
+      <div>
+        <span class="brand-name">SyndicPro Scanner</span>
+        <span class="brand-sub">Prospects avec emails</span>
+      </div>
+    </div>
+    <nav class="nav-links">
+      <a href="/" class="nav-link">Recherche</a>
+      <a href="/dashboard" class="nav-link">Command Center</a>
+      <a href="/prospects" class="nav-link active">Prospects</a>
+      <a href="/pipeline" class="nav-link">Pipeline</a>
+      <a href="/nouveautes" class="nav-link">Nouveautés</a>
+    </nav>
+  </div>
+</header>
+
+<!-- ── KPI bar ── -->
+<div class="kpi-bar">
+  <div class="kpi green"><div class="val" id="kEmails">—</div><div class="lbl">Emails collectés</div></div>
+  <div class="kpi blue"> <div class="val" id="kPhones">—</div><div class="lbl">Avec téléphone</div></div>
+  <div class="kpi amber"><div class="val" id="kScore50">—</div><div class="lbl">Score ≥ 50</div></div>
+  <div class="kpi purple"><div class="val" id="kSeq">—</div><div class="lbl">Séquences actives</div></div>
+  <div class="kpi green"><div class="val" id="kOpened">—</div><div class="lbl">Emails ouverts</div></div>
+</div>
+
+<!-- ── Filtres ville ── -->
+<div class="city-pills" id="cityPills"></div>
+
+<!-- ── Toolbar ── -->
+<div class="toolbar">
+  <input type="search" id="searchInput" placeholder="🔍 Rechercher nom, ville, email…">
+  <select id="scoreFilter">
+    <option value="0">Tous les scores</option>
+    <option value="50">Score ≥ 50</option>
+    <option value="60">Score ≥ 60</option>
+    <option value="70">Score ≥ 70</option>
+  </select>
+  <select id="seqFilter">
+    <option value="all">Toutes séquences</option>
+    <option value="none">Sans séquence</option>
+    <option value="started">Séquence en cours</option>
+  </select>
+  <button class="btn-sm btn-sm-outline" onclick="toggleCheckAll()">☐ Tout sélectionner</button>
+  <div class="spacer"></div>
+  <span id="selCount"></span>
+  <button class="btn-sm btn-sm-primary" id="btnLaunch" onclick="launchSelected()" disabled>▶ Lancer séquences</button>
+</div>
+
+<!-- ── Table ── -->
+<div class="table-wrap">
+  <table>
+    <thead>
+      <tr>
+        <th class="td-check"><input type="checkbox" id="masterCheck" onchange="masterToggle(this)"></th>
+        <th class="sortable" data-col="name">Résidence</th>
+        <th class="sortable" data-col="city">Ville</th>
+        <th>Email</th>
+        <th>Téléphone</th>
+        <th>Président</th>
+        <th class="sortable" data-col="lead_score">Score ▾</th>
+        <th class="sortable" data-col="confidence">Confiance</th>
+        <th>Séquence</th>
+        <th>Action</th>
+      </tr>
+    </thead>
+    <tbody id="tbody">
+      <tr><td colspan="10"><div class="empty-state"><div class="spinner-large"></div><p>Chargement…</p></div></td></tr>
+    </tbody>
+  </table>
+</div>
+
+<div class="toast-container" id="toastContainer"></div>
+
+<footer class="footer">
+  <span>SyndicPro Scanner © 2025</span>
+  <a href="/" class="footer-link">← Nouvelle recherche</a>
+</footer>
+
+<script>
+let allContacts = [];
+let filtered    = [];
+let selected    = new Set();
+let sortCol     = 'lead_score';
+let sortDir     = 'desc';
+let cityFilter  = '';
+let scoreMin    = 0;
+let seqFilter   = 'all';
+let searchQ     = '';
+let checkAll    = false;
+
+// ── Init ──────────────────────────────────────────────────────────────────────
+async function init() {
+  await loadContacts();
+  buildCityPills();
+  renderTable();
+  loadKPIs();
+}
+
+async function loadContacts() {
+  try {
+    const r = await fetch('/api/prospects');
+    const d = await r.json();
+    allContacts = d.prospects || [];
+  } catch(e) {
+    document.getElementById('tbody').innerHTML =
+      `<tr><td colspan="10"><div class="empty-state">Erreur : ${e.message}</div></td></tr>`;
+  }
+}
+
+// ── KPIs ──────────────────────────────────────────────────────────────────────
+async function loadKPIs() {
+  document.getElementById('kEmails').textContent  = allContacts.length;
+  document.getElementById('kPhones').textContent  = allContacts.filter(c => c.phone).length;
+  document.getElementById('kScore50').textContent = allContacts.filter(c => (c.lead_score||0) >= 50).length;
+  document.getElementById('kSeq').textContent     = allContacts.filter(c => c.seq_started_at).length;
+  try {
+    const r = await fetch('/api/pipeline/stats');
+    const d = await r.json();
+    document.getElementById('kOpened').textContent = d.opened ?? '—';
+  } catch(e) {}
+}
+
+// ── City pills ────────────────────────────────────────────────────────────────
+function buildCityPills() {
+  const counts = {};
+  allContacts.forEach(c => { counts[c.city] = (counts[c.city] || 0) + 1; });
+  const sorted = Object.entries(counts).sort((a, b) => b[1] - a[1]).slice(0, 14);
+  const wrap = document.getElementById('cityPills');
+  wrap.innerHTML = `<span class="city-pill active" data-city="" onclick="setCity('')">Toutes (${allContacts.length})</span>`;
+  sorted.forEach(([city, n]) => {
+    wrap.innerHTML += `<span class="city-pill" data-city="${esc(city)}" onclick="setCity('${esc(city)}')">${esc(city)} (${n})</span>`;
+  });
+}
+
+function setCity(city) {
+  cityFilter = city;
+  document.querySelectorAll('.city-pill').forEach(p =>
+    p.classList.toggle('active', p.dataset.city === city)
+  );
+  renderTable();
+}
+
+// ── Filter + sort ─────────────────────────────────────────────────────────────
+function applyFilters() {
+  filtered = allContacts.filter(c => {
+    if (cityFilter && c.city !== cityFilter) return false;
+    if ((c.lead_score || 0) < scoreMin) return false;
+    if (seqFilter === 'none' && c.seq_started_at) return false;
+    if (seqFilter === 'started' && !c.seq_started_at) return false;
+    if (searchQ) {
+      const hay = [c.name, c.city, c.email, c.phone, c.president].join(' ').toLowerCase();
+      if (!hay.includes(searchQ)) return false;
+    }
+    return true;
+  });
+  filtered.sort((a, b) => {
+    let av = a[sortCol] ?? (typeof a[sortCol] === 'number' ? 0 : '');
+    let bv = b[sortCol] ?? (typeof b[sortCol] === 'number' ? 0 : '');
+    if (typeof av === 'string') av = av.toLowerCase();
+    if (typeof bv === 'string') bv = bv.toLowerCase();
+    if (av < bv) return sortDir === 'asc' ? -1 : 1;
+    if (av > bv) return sortDir === 'asc' ? 1 : -1;
+    return 0;
+  });
+}
+
+// ── Render ────────────────────────────────────────────────────────────────────
+function renderTable() {
+  applyFilters();
+  const tbody = document.getElementById('tbody');
+
+  if (!filtered.length) {
+    tbody.innerHTML = `<tr><td colspan="10"><div class="empty-state">📭 Aucun prospect avec ces filtres.</div></td></tr>`;
+    updateUI();
+    return;
+  }
+
+  tbody.innerHTML = filtered.map(c => {
+    const score    = c.lead_score || 0;
+    const scoreCls = score >= 60 ? 'score-high' : score >= 40 ? 'score-mid' : 'score-low';
+    const conf     = c.confidence || 0;
+    const confColor = conf >= 60 ? 'var(--green)' : conf >= 30 ? 'var(--amber)' : 'var(--red)';
+
+    const pres = c.members && c.members.length
+      ? esc(c.members[0].nom) + (c.members.length > 1 ? ` <span style="color:var(--text-dim)">+${c.members.length-1}</span>` : '')
+      : c.president ? esc(c.president) : `<span style="color:var(--text-dim)">—</span>`;
+
+    let seqHtml = `<span style="color:var(--text-dim);font-size:.75rem">—</span>`;
+    if (c.seq_started_at) {
+      const step = c.seq_step || 1;
+      seqHtml = `<span class="seq-dots">`;
+      for (let s = 1; s <= 4; s++) {
+        const cls = s < step ? 'done' : s === step ? 'active' : '';
+        seqHtml += `<span class="seq-dot ${cls}" title="Email ${s}"></span>`;
+      }
+      seqHtml += `</span><span class="seq-label">étape ${step}/4</span>`;
+    }
+
+    const seqBtn = c.seq_started_at
+      ? `<button class="btn-row btn-row-done" disabled>✓ En cours</button>`
+      : `<button class="btn-row btn-row-seq" onclick="launchOne(${c.id}, this)">▶ Séquence</button>`;
+
+    return `<tr id="row-${c.id}" class="${selected.has(c.id) ? 'selected' : ''}">
+      <td class="td-check"><input type="checkbox" data-id="${c.id}" ${selected.has(c.id) ? 'checked' : ''} onchange="toggleRow(${c.id}, this)"></td>
+      <td class="name-cell">
+        <strong>${esc(c.name)}</strong>
+        ${c.address ? `<div class="sub">${esc(c.address.slice(0, 45))}</div>` : ''}
+      </td>
+      <td style="color:var(--text-muted)">${esc(c.city)}</td>
+      <td><a href="mailto:${esc(c.email)}">${esc(c.email)}</a></td>
+      <td>${c.phone ? `<a href="tel:${esc(c.phone)}">${esc(c.phone)}</a>` : `<span style="color:var(--text-dim)">—</span>`}</td>
+      <td style="font-size:.8rem">${pres}</td>
+      <td><span class="score-pill ${scoreCls}">${score}</span></td>
+      <td><span class="conf-pill" style="background:${confColor}18;color:${confColor}">${conf.toFixed(0)}%</span></td>
+      <td>${seqHtml}</td>
+      <td>${seqBtn}</td>
+    </tr>`;
+  }).join('');
+
+  // Rebind sort headers
+  document.querySelectorAll('th.sortable').forEach(th => {
+    th.className = 'sortable' + (th.dataset.col === sortCol ? ` sort-${sortDir}` : '');
+    th.onclick = () => setSort(th.dataset.col);
+  });
+
+  updateUI();
+}
+
+function setSort(col) {
+  sortDir = (sortCol === col && sortDir === 'desc') ? 'asc' : 'desc';
+  if (sortCol !== col) sortDir = col === 'name' || col === 'city' ? 'asc' : 'desc';
+  sortCol = col;
+  renderTable();
+}
+
+// ── Selection ─────────────────────────────────────────────────────────────────
+function toggleRow(id, chk) {
+  if (chk.checked) selected.add(id);
+  else selected.delete(id);
+  document.getElementById(`row-${id}`)?.classList.toggle('selected', chk.checked);
+  updateUI();
+}
+
+function toggleCheckAll() {
+  checkAll = !checkAll;
+  filtered.forEach(c => { checkAll ? selected.add(c.id) : selected.delete(c.id); });
+  document.querySelectorAll('[data-id]').forEach(chk => {
+    chk.checked = checkAll;
+    document.getElementById(`row-${chk.dataset.id}`)?.classList.toggle('selected', checkAll);
+  });
+  document.getElementById('masterCheck').checked = checkAll;
+  updateUI();
+}
+
+function masterToggle(masterChk) {
+  checkAll = masterChk.checked;
+  filtered.forEach(c => { checkAll ? selected.add(c.id) : selected.delete(c.id); });
+  document.querySelectorAll('[data-id]').forEach(chk => {
+    chk.checked = checkAll;
+    document.getElementById(`row-${chk.dataset.id}`)?.classList.toggle('selected', checkAll);
+  });
+  updateUI();
+}
+
+function updateUI() {
+  const n = selected.size;
+  document.getElementById('selCount').textContent = n
+    ? `${n} sélectionné(s)`
+    : `${filtered.length} prospects affichés`;
+  document.getElementById('btnLaunch').disabled = n === 0;
+}
+
+// ── Launch sequences ──────────────────────────────────────────────────────────
+async function launchOne(id, btn) {
+  btn.disabled = true; btn.textContent = '…';
+  try {
+    const r = await fetch('/api/sequence/start', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ids: [id]})
+    });
+    const d = await r.json();
+    if (d.started) {
+      btn.className = 'btn-row btn-row-done';
+      btn.textContent = '✓ En cours';
+      const c = allContacts.find(x => x.id === id);
+      if (c) { c.seq_started_at = 'now'; c.seq_step = 1; }
+      toast('✅ Séquence lancée !', 'success');
+      loadKPIs();
+    } else {
+      btn.disabled = false; btn.textContent = '▶ Séquence';
+      toast('Erreur lancement', 'error');
+    }
+  } catch(e) {
+    btn.disabled = false; btn.textContent = '▶ Séquence';
+    toast('Erreur réseau', 'error');
+  }
+}
+
+async function launchSelected() {
+  if (!selected.size) return;
+  const ids = [...selected];
+  if (!confirm(`Lancer la séquence drip (4 emails / 14 jours) pour ${ids.length} contact(s) ?`)) return;
+  document.getElementById('btnLaunch').disabled = true;
+  document.getElementById('btnLaunch').textContent = '⏳ Lancement…';
+  try {
+    const r = await fetch('/api/sequence/start', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ids})
+    });
+    const d = await r.json();
+    toast(`✅ ${d.started} séquence(s) lancée(s) !`, 'success');
+    selected.clear(); checkAll = false;
+    await loadContacts();
+    buildCityPills();
+    renderTable();
+    loadKPIs();
+  } catch(e) {
+    toast('Erreur réseau', 'error');
+  } finally {
+    document.getElementById('btnLaunch').textContent = '▶ Lancer séquences';
+  }
+}
+
+// ── Events ────────────────────────────────────────────────────────────────────
+document.getElementById('searchInput').addEventListener('input', e => {
+  searchQ = e.target.value.trim().toLowerCase();
+  renderTable();
+});
+document.getElementById('scoreFilter').addEventListener('change', e => {
+  scoreMin = parseInt(e.target.value) || 0;
+  renderTable();
+});
+document.getElementById('seqFilter').addEventListener('change', e => {
+  seqFilter = e.target.value;
+  renderTable();
+});
+
+// ── Toast ─────────────────────────────────────────────────────────────────────
+function toast(msg, type = 'info') {
+  const c = document.getElementById('toastContainer');
+  const t = document.createElement('div');
+  t.className = `toast ${type}`;
+  t.textContent = msg;
+  c.appendChild(t);
+  setTimeout(() => t.remove(), 3500);
+}
+
+function esc(s) {
+  return String(s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+init();
+</script>
+</body>
+</html>

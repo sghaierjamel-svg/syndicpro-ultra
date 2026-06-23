@@ -24,7 +24,7 @@ import logging
 from urllib.parse import quote, urlparse, unquote
 from concurrent.futures import ThreadPoolExecutor, wait, ALL_COMPLETED
 from bs4 import BeautifulSoup
-from utils import extract_data
+from utils import extract_data, normalize_phone
 
 # ─────────────────────────────────────────────────────────────────────────────
 #  Constantes
@@ -348,7 +348,7 @@ def src_facebook_mobile(name, city, short, context=""):
         if r["phones"] or r["emails"]:
             break
 
-    # Pages Facebook
+    # Pages Facebook — recherche + crawl de la section About
     if not r["phones"] and not r["emails"]:
         q    = quote(f"{short}{ctx} {city}")
         html = fetch(f"https://mbasic.facebook.com/search/pages/?q={q}",
@@ -361,8 +361,39 @@ def src_facebook_mobile(name, city, short, context=""):
                     page_url = href if href.startswith('http') else f"https://mbasic.facebook.com{href}"
                     d = extract_data(fetch(page_url, referer="https://mbasic.facebook.com/"))
                     _merge(r, d, sp, se)
+                    # Essayer la section "À propos" qui contient souvent le téléphone
+                    if not r["phones"] and not r["emails"]:
+                        about_url = page_url.rstrip('/') + '/about'
+                        d2 = extract_data(fetch(about_url, referer="https://mbasic.facebook.com/", timeout=6))
+                        _merge(r, d2, sp, se)
                     if r["phones"] or r["emails"]:
                         break
+
+    # Recherche via DDG site:facebook.com si rien trouvé
+    if not r["phones"] and not r["emails"]:
+        ddg_html = fetch(
+            f"https://lite.duckduckgo.com/lite/?q={quote('site:facebook.com ' + short + ' ' + city)}",
+            retries=0
+        )
+        if ddg_html:
+            soup_ddg = BeautifulSoup(ddg_html, "html.parser")
+            for a in soup_ddg.find_all('a', href=True):
+                href = a['href']
+                if 'uddg=' in href:
+                    try:
+                        href = unquote(href.split('uddg=')[1].split('&')[0])
+                    except Exception:
+                        continue
+                if 'facebook.com/' in href and 'search' not in href and 'login' not in href:
+                    path_slug = href.split('facebook.com/')[-1].split('?')[0].rstrip('/')
+                    if path_slug and '/' not in path_slug and len(path_slug) > 2:
+                        mbasic = f"https://mbasic.facebook.com/{path_slug}"
+                        for page_path in ['', '/about']:
+                            d = extract_data(fetch(mbasic + page_path, referer="https://mbasic.facebook.com/", timeout=6, retries=0))
+                            _merge(r, d, sp, se)
+                        if r["phones"] or r["emails"]:
+                            break
+
     return r, "facebook"
 
 
@@ -473,6 +504,37 @@ def src_google_maps(name, city, short, context=""):
     return r, "google_maps"
 
 
+def src_google_local(name, city, short, context=""):
+    """
+    Recherche Google locale ciblée — extrait le numéro du Knowledge Panel
+    et des fiches Google Maps qui apparaissent souvent dans les snippets.
+    """
+    ctx = f" {context}" if context else ""
+    r   = {"phones": [], "emails": [], "websites": []}
+    sp, se = set(), set()
+    for q in [
+        f'"{short}" {city} tunisie téléphone contact',
+        f'"{short}" syndic {city} تونس هاتف',
+        f'résidence "{short}" {city} contact',
+    ]:
+        try:
+            resp = requests.get(
+                f"https://www.google.com/search?q={quote(q)}&hl=fr&gl=tn&num=5",
+                headers=_headers("https://www.google.com/"), timeout=7,
+                allow_redirects=True
+            )
+            if resp.status_code == 200:
+                d = extract_data(resp.text)
+                _merge(r, d, sp, se)
+            elif resp.status_code == 429:
+                time.sleep(2)
+        except Exception:
+            pass
+        if r["phones"] or r["emails"]:
+            break
+    return r, "google_local"
+
+
 def src_truecaller_query(query: str, country: str = "TN") -> dict:
     """
     Truecaller — recherche par nom (API non officielle v2).
@@ -557,6 +619,101 @@ def src_mubawab(name, city, short, context=""):
         if r["phones"] or r["emails"]:
             return r, "mubawab"
     return r, "mubawab"
+
+
+def src_address_search(name, city, short, address):
+    """
+    Recherche ciblée par adresse officielle RNE.
+    Extrait le code postal (4 chiffres) + mots-clés de rue pour des requêtes
+    ultra-précises impossibles à faire sans l'adresse.
+    Ex: "Les Violettes" "1082" téléphone → bien plus ciblé que nom seul.
+    """
+    if not address or not address.strip():
+        return {"phones": [], "emails": [], "websites": []}, "address_search"
+
+    r  = {"phones": [], "emails": [], "websites": []}
+    sp, se = set(), set()
+
+    # Code postal tunisien (4 chiffres)
+    postal_match = re.search(r'\b([1-9]\d{3})\b', address)
+    postal = postal_match.group(1) if postal_match else ""
+
+    # Translittérer si l'adresse est en arabe
+    addr_latin = _ar_to_latin(address) if _is_arabic(address[:30]) else address
+
+    # Extraire les mots-clés de rue (ignorer termes génériques)
+    _STOP_ADDR = {
+        'de', 'la', 'le', 'les', 'des', 'du', 'au', 'en', 'et', 'sur',
+        'avenue', 'rue', 'impasse', 'bloc', 'batiment', 'immeuble',
+        'residence', 'syndic', 'coproprietaires', 'naqaba',
+    }
+    addr_words = [
+        w for w in re.sub(r'[^\w\s]', ' ', addr_latin).split()
+        if len(w) > 3 and w.lower() not in _STOP_ADDR
+    ]
+    street_hint = " ".join(addr_words[:3])  # max 3 mots de rue
+
+    queries = []
+    if postal:
+        queries.append(f'"{short}" "{postal}" téléphone contact')
+        queries.append(f'"{short}" {city} {postal} contact')
+    if street_hint:
+        queries.append(f'"{short}" {street_hint} téléphone')
+    queries.append(f'"{short}" {city} adresse téléphone syndic')
+
+    for q in queries:
+        for url, ref in [
+            (f"https://lite.duckduckgo.com/lite/?q={quote(q)}", ""),
+            (f"https://www.bing.com/search?q={quote(q)}&cc=TN&setlang=fr", "https://www.bing.com/"),
+        ]:
+            d = extract_data(fetch(url, referer=ref, timeout=6, retries=0))
+            _merge(r, d, sp, se)
+            if r["phones"] or r["emails"]:
+                logging.info(f"[address_search] Trouvé via postal={postal} → {r['phones']} {r['emails']}")
+                return r, "address_search"
+
+    return r, "address_search"
+
+
+def src_instagram(name, city, short, context=""):
+    """
+    Instagram via DDG — de plus en plus de résidences tunisiennes ont une page
+    avec le numéro dans la bio ou en description.
+    """
+    ctx = f" {context}" if context else ""
+    r   = {"phones": [], "emails": [], "websites": []}
+    sp, se = set(), set()
+
+    for q in [
+        f'site:instagram.com "{short}" {city}',
+        f'site:instagram.com "{short}"{ctx} tunisie',
+    ]:
+        html = fetch(f"https://lite.duckduckgo.com/lite/?q={quote(q)}", retries=0, timeout=6)
+        if not html:
+            continue
+        # Extraire contacts depuis les snippets DDG (souvent suffisant)
+        d = extract_data(html)
+        _merge(r, d, sp, se)
+        if r["phones"] or r["emails"]:
+            break
+        # Essayer de visiter la page Instagram directement
+        soup_ig = BeautifulSoup(html, "html.parser")
+        for a in soup_ig.find_all('a', href=True):
+            href = a['href']
+            if 'uddg=' in href:
+                try:
+                    href = unquote(href.split('uddg=')[1].split('&')[0])
+                except Exception:
+                    continue
+            if 'instagram.com/' in href and '/p/' not in href and '/reel/' not in href:
+                page_html = fetch(href, timeout=6, retries=0)
+                if page_html:
+                    d2 = extract_data(page_html)
+                    _merge(r, d2, sp, se)
+                    if r["phones"] or r["emails"]:
+                        return r, "instagram"
+
+    return r, "instagram"
 
 
 def src_tayara(name, city, short, context=""):
@@ -687,7 +844,7 @@ def src_contact_crawler(name, city, short, context="", extra_urls=None):
     seen      = set()
     t_start   = time.time()
 
-    contact_paths = ['/contact', '/nous-contacter', '/']
+    contact_paths = ['/contact', '/nous-contacter', '/contactez-nous', '/about', '/a-propos', '/info', '/']
 
     for base_url in urls[:3]:    # max 3 domaines
         if time.time() - t_start > 12:   # budget global 12s
@@ -907,6 +1064,16 @@ def src_rne_entite(rne_id: str):
                 result["emails"].append(email)
                 logging.info(f"[RNE entite] {rne_id} → email: {email}")
 
+            # Date de création (dateDebutActivite en priorité, sinon dateEnregistrement)
+            date_cr = (d.get("dateDebutActivite") or d.get("dateEnregistrement") or "").strip()
+            if date_cr:
+                result["date_creation"] = date_cr
+
+            # Ville si absente
+            ville = (d.get("villeFr") or d.get("villeSiegeFr") or "").strip()
+            if ville:
+                result["city_rne"] = ville
+
             # Extraction téléphone depuis le JSON brut (tous les champs possible)
             raw_contacts = extract_data(r.text)
             _merge(result, raw_contacts, set(result["phones"]), set(result["emails"]))
@@ -1017,13 +1184,33 @@ def src_rne_borne(name, city, short, rne_id=""):
     result["address"]   = (det.get("adresse") or "").strip()
 
     # ── Extraction téléphone/email depuis le JSON brut ─────────────────────────
-    # On passe le JSON en texte à extract_data pour capturer tous les champs
-    # (telephone, telephoneSociete, numTelephone, telSociete, mobile, gsm…)
     raw_contacts = extract_data(json.dumps(det))
     sp_rne, se_rne = set(), set()
     _merge(result, raw_contacts, sp_rne, se_rne)
-    if raw_contacts.get("phones"):
-        logging.info(f"[RNE borne] téléphone extrait du JSON: {raw_contacts['phones']}")
+
+    # Extraction directe des champs connus du JSON RNE (filet de sécurité)
+    for field in [
+        'telephone', 'telSociete', 'telephoneSociete', 'numTelephone',
+        'telBureau', 'telFixe', 'mobile', 'gsm', 'telMobile',
+        'numTelephonePersonnel', 'numTelPerso', 'tel', 'phone',
+    ]:
+        val = str(det.get(field) or "").strip()
+        if val and val not in ('null', 'None', '0', ''):
+            n = normalize_phone(re.sub(r'[^\d+]', '', val))
+            if n and n not in sp_rne:
+                sp_rne.add(n)
+                result["phones"].append(n)
+                logging.info(f"[RNE borne] champ {field} → {n}")
+
+    for field in ['email', 'adresseEmail', 'emailSociete', 'adresseEmailSociete']:
+        val = str(det.get(field) or "").strip().lower()
+        if val and '@' in val and val not in se_rne:
+            se_rne.add(val)
+            result["emails"].append(val)
+            logging.info(f"[RNE borne] champ {field} → {val}")
+
+    if raw_contacts.get("phones") or result["phones"]:
+        logging.info(f"[RNE borne] téléphones trouvés: {result['phones']}")
 
     return result, "rne_borne"
 
@@ -1032,7 +1219,7 @@ def src_rne_borne(name, city, short, rne_id=""):
 #  ORCHESTRATEUR
 # ─────────────────────────────────────────────────────────────────────────────
 
-def scrape_all(name: str, city: str, rne_id: str = "", context: str = "") -> list:
+def scrape_all(name: str, city: str, rne_id: str = "", context: str = "", timeout: int = 22) -> list:
     """
     Lance toutes les sources en parallèle.
     context : type d'activité optionnel ('syndic', 'restaurant', etc.)
@@ -1052,6 +1239,7 @@ def scrape_all(name: str, city: str, rne_id: str = "", context: str = "") -> lis
         "bing":         lambda: src_bing(name, city, sn, context),
         "facebook":     lambda: src_facebook_mobile(name, city, sn, context),
         "google":       lambda: src_google(name, city, sn, context),
+        "google_local": lambda: src_google_local(name, city, sn, context),
         "arabic":       lambda: src_arabic(name, city, sn, context),
         "pj_tn":        lambda: src_pj_tn(name, city, sn, context),
         "yellow_tn":    lambda: src_yellow_tn(name, city, sn, context),
@@ -1071,10 +1259,10 @@ def scrape_all(name: str, city: str, rne_id: str = "", context: str = "") -> lis
     # IMPORTANT: on n'utilise PAS "with" pour éviter que __exit__ bloque
     # jusqu'à ce que tous les threads terminent. shutdown(wait=False) laisse
     # les threads tourner en arrière-plan et libère le fil principal immédiatement.
-    ex = ThreadPoolExecutor(max_workers=15)
+    ex = ThreadPoolExecutor(max_workers=16)
     try:
         fmap = {ex.submit(fn): key for key, fn in phase1.items()}
-        done, not_done = wait(fmap.keys(), timeout=22, return_when=ALL_COMPLETED)
+        done, not_done = wait(fmap.keys(), timeout=timeout, return_when=ALL_COMPLETED)
         for f in not_done:
             f.cancel()
         for future in done:
@@ -1118,18 +1306,24 @@ def scrape_all(name: str, city: str, rne_id: str = "", context: str = "") -> lis
             seen_w.add(w)
             extra_urls.append(w)
 
-    # Lancer crawler + rne_entite en parallèle (sauf si sortie anticipée)
+    # Lancer crawler + rne_entite + address_search + instagram en parallèle
     phase15_tasks = {}
     effective_rne_id = rne_id or (rne_borne_r.get("rne_id_found") if rne_borne_r else "")
+    rne_address = (rne_borne_r.get("address") or "").strip() if rne_borne_r else ""
+
     if not _skip_p15:
         if effective_rne_id:
             phase15_tasks["rne_entite"] = lambda: src_rne_entite(effective_rne_id)
-        phase15_tasks["crawler"] = lambda: src_contact_crawler(name, city, sn, context, extra_urls=extra_urls)
+        phase15_tasks["crawler"]  = lambda: src_contact_crawler(name, city, sn, context, extra_urls=extra_urls)
+        phase15_tasks["instagram"] = lambda: src_instagram(name, city, sn, context)
+        if rne_address:
+            phase15_tasks["address_search"] = lambda a=rne_address: src_address_search(name, city, sn, a)
     elif effective_rne_id and not _p1_emails:
-        # On a le téléphone mais pas l'email — rne_entite seul vaut le coup
         phase15_tasks["rne_entite"] = lambda: src_rne_entite(effective_rne_id)
+        if rne_address:
+            phase15_tasks["address_search"] = lambda a=rne_address: src_address_search(name, city, sn, a)
 
-    ex15 = ThreadPoolExecutor(max_workers=2)
+    ex15 = ThreadPoolExecutor(max_workers=4)
     try:
         fmap15 = {ex15.submit(fn): key for key, fn in phase15_tasks.items()}
         done15, not_done15 = wait(fmap15.keys(), timeout=18, return_when=ALL_COMPLETED)
@@ -1160,8 +1354,8 @@ def scrape_all(name: str, city: str, rne_id: str = "", context: str = "") -> lis
                 continue
             qualite = member.get("qualite", "")
             key = f"member_{i}_{qualite}"
-            phase2_tasks[key] = lambda n=nom, q=qualite: _src_member_personal(
-                n, city, denom_latin, q
+            phase2_tasks[key] = lambda n=nom, q=qualite, a=rne_address: _src_member_personal(
+                n, city, denom_latin, q, address=a
             )
 
         if phase2_tasks:
@@ -1212,10 +1406,10 @@ def scrape_rne_only(rne_id: str, name: str, city: str) -> list:
     return results
 
 
-def _src_member_personal(nom: str, city: str, denom_latin: str, qualite: str = ""):
+def _src_member_personal(nom: str, city: str, denom_latin: str, qualite: str = "", address: str = ""):
     """
     Recherche rapide du contact d'un membre RNE.
-    Priorité vitesse : timeout courts, 1-2 requêtes max par source.
+    Utilise le nom, la résidence, la ville et le code postal pour des requêtes précises.
     Budget total : 8 secondes (sources en parallèle).
     """
     r  = {"phones": [], "emails": [], "websites": []}
@@ -1223,13 +1417,17 @@ def _src_member_personal(nom: str, city: str, denom_latin: str, qualite: str = "
 
     # Forme latine : translittération si arabe, sinon nom tel quel
     nom_latin = _ar_to_latin(nom) if _is_arabic(nom) else nom
-    # Nom de famille seul (dernier mot) — plus distinctif
     nom_famille = nom_latin.split()[-1] if nom_latin else ""
-    # Formes de recherche : latin complet + latin famille seulement
     noms = list(dict.fromkeys(filter(None, [nom_latin, nom_famille])))
 
+    # Code postal depuis l'adresse RNE
+    postal = ""
+    if address:
+        pm = re.search(r'\b([1-9]\d{3})\b', address)
+        if pm:
+            postal = pm.group(1)
+
     def _quick_fetch(url: str, referer: str = "") -> dict:
-        """Fetch avec timeout court (4s) et extraction directe des snippets."""
         html = fetch(url, timeout=4, referer=referer)
         return extract_data(html or "")
 
@@ -1238,10 +1436,17 @@ def _src_member_personal(nom: str, city: str, denom_latin: str, qualite: str = "
         n = noms[0] if noms else ""
         if not n:
             return out
-        for q in [
+        queries = [
+            f'"{n}" "{denom_latin}" téléphone contact',  # nom + résidence = très ciblé
+            f'"{n}" {city} syndic téléphone',
+        ]
+        if postal:
+            queries.append(f'"{n}" {postal} téléphone')  # nom + code postal
+        queries += [
             f'"{n}" {city} téléphone',
             f'"{n}" {denom_latin}',
-        ]:
+        ]
+        for q in queries:
             d = _quick_fetch(f"https://lite.duckduckgo.com/lite/?q={quote(q)}")
             for p in d.get("phones", []):
                 if p not in out["phones"]: out["phones"].append(p)
@@ -1256,15 +1461,21 @@ def _src_member_personal(nom: str, city: str, denom_latin: str, qualite: str = "
         n = noms[0] if noms else ""
         if not n:
             return out
-        q = f'"{n}" {city} téléphone tunisie'
-        d = _quick_fetch(
-            f"https://www.bing.com/search?cc=TN&setlang=fr&q={quote(q)}",
-            referer="https://www.bing.com/"
-        )
-        for p in d.get("phones", []):
-            if p not in out["phones"]: out["phones"].append(p)
-        for e in d.get("emails", []):
-            if e not in out["emails"]: out["emails"].append(e)
+        queries = [f'"{n}" "{denom_latin}" téléphone']
+        if postal:
+            queries.append(f'"{n}" {postal} {city} téléphone')
+        queries.append(f'"{n}" {city} téléphone tunisie')
+        for q in queries:
+            d = _quick_fetch(
+                f"https://www.bing.com/search?cc=TN&setlang=fr&q={quote(q)}",
+                referer="https://www.bing.com/"
+            )
+            for p in d.get("phones", []):
+                if p not in out["phones"]: out["phones"].append(p)
+            for e in d.get("emails", []):
+                if e not in out["emails"]: out["emails"].append(e)
+            if out["phones"] or out["emails"]:
+                break
         return out
 
     def _platforms():

@@ -1,0 +1,644 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Pipeline Commercial — SyndicPro Scanner</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      background: #0f172a;
+      color: #e2e8f0;
+      min-height: 100vh;
+    }
+
+    /* ── Header ── */
+    .header {
+      background: #1e293b;
+      border-bottom: 1px solid #334155;
+      padding: .9rem 1.5rem;
+      display: flex;
+      align-items: center;
+      gap: 1.5rem;
+    }
+    .header h1 { font-size: 1.1rem; font-weight: 700; color: #f1f5f9; }
+    .header h1 span { color: #3b82f6; }
+    .nav-links { display: flex; gap: 1rem; margin-left: auto; }
+    .nav-links a {
+      color: #94a3b8; text-decoration: none; font-size: .85rem; padding: .3rem .6rem;
+      border-radius: 6px; transition: all .2s;
+    }
+    .nav-links a:hover, .nav-links a.active { color: #fff; background: #334155; }
+
+    /* ── KPI strip ── */
+    .kpi-bar {
+      display: flex; gap: 1rem; padding: 1rem 1.5rem;
+      background: #1e293b; border-bottom: 1px solid #334155;
+      overflow-x: auto;
+    }
+    .kpi {
+      background: #0f172a; border: 1px solid #334155; border-radius: 10px;
+      padding: .7rem 1.2rem; text-align: center; min-width: 130px; flex-shrink: 0;
+    }
+    .kpi .val { font-size: 1.5rem; font-weight: 700; color: #fff; }
+    .kpi .lbl { font-size: .72rem; color: #64748b; margin-top: .2rem; text-transform: uppercase; letter-spacing: .04em; }
+    .kpi.accent .val { color: #10b981; }
+    .kpi.blue .val { color: #3b82f6; }
+    .kpi.purple .val { color: #a78bfa; }
+
+    /* ── Toolbar ── */
+    .toolbar {
+      display: flex; align-items: center; gap: .8rem;
+      padding: .8rem 1.5rem; background: #0f172a; border-bottom: 1px solid #1e293b;
+      flex-wrap: wrap;
+    }
+    .toolbar .spacer { flex: 1; }
+    .btn {
+      padding: .45rem 1rem; border-radius: 7px; border: none; cursor: pointer;
+      font-size: .83rem; font-weight: 600; transition: all .2s;
+    }
+    .btn-primary { background: #3b82f6; color: #fff; }
+    .btn-primary:hover { background: #2563eb; }
+    .btn-green { background: #10b981; color: #fff; }
+    .btn-green:hover { background: #059669; }
+    .btn-outline {
+      background: transparent; color: #94a3b8;
+      border: 1px solid #334155;
+    }
+    .btn-outline:hover { border-color: #64748b; color: #e2e8f0; }
+    .btn:disabled { opacity: .45; cursor: not-allowed; }
+    .btn-teal { background: #0d9488; color: #fff; }
+    .btn-teal:hover { background: #0f766e; }
+
+    /* Modal sync RNE */
+    .modal-overlay {
+      display: none; position: fixed; inset: 0; background: rgba(0,0,0,.6);
+      z-index: 100; align-items: center; justify-content: center;
+    }
+    .modal-overlay.open { display: flex; }
+    .modal {
+      background: #1e293b; border: 1px solid #334155; border-radius: 14px;
+      padding: 1.8rem 2rem; width: 460px; max-width: 94vw;
+    }
+    .modal h3 { font-size: 1.05rem; font-weight: 700; margin-bottom: 1.2rem; color: #f1f5f9; }
+    .sync-stat { display: flex; justify-content: space-between; padding: .45rem 0;
+                  border-bottom: 1px solid #1e293b; font-size: .9rem; }
+    .sync-stat .label { color: #94a3b8; }
+    .sync-stat .value { font-weight: 700; color: #f1f5f9; }
+    .sync-stat .value.green { color: #10b981; }
+    .sync-stat .value.amber { color: #f59e0b; }
+    .sync-names { margin-top: .6rem; font-size: .78rem; color: #64748b; line-height: 1.5; }
+    .spinner { display: inline-block; width: 16px; height: 16px;
+               border: 2px solid #334155; border-top-color: #3b82f6;
+               border-radius: 50%; animation: spin .7s linear infinite; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* ── Kanban board ── */
+    .board-wrapper { overflow-x: auto; padding: 1rem 1.5rem 2rem; }
+    .board {
+      display: flex; gap: 1rem;
+      min-width: 1100px;
+    }
+
+    .column {
+      flex: 1; min-width: 175px;
+      background: #1e293b; border-radius: 12px;
+      border: 1px solid #334155;
+      display: flex; flex-direction: column;
+      max-height: calc(100vh - 260px);
+    }
+    .col-header {
+      padding: .75rem 1rem;
+      border-bottom: 1px solid #334155;
+      display: flex; align-items: center; gap: .5rem;
+      position: sticky; top: 0;
+      background: #1e293b; border-radius: 12px 12px 0 0;
+    }
+    .col-dot { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
+    .col-title { font-size: .82rem; font-weight: 700; color: #f1f5f9; }
+    .col-count { margin-left: auto; background: #334155; color: #94a3b8; font-size: .72rem; padding: .15rem .5rem; border-radius: 20px; }
+
+    .cards { overflow-y: auto; padding: .6rem; display: flex; flex-direction: column; gap: .5rem; }
+
+    /* ── Card ── */
+    .card {
+      background: #0f172a; border: 1px solid #1e293b;
+      border-radius: 9px; padding: .75rem;
+      cursor: pointer; transition: border-color .2s, transform .15s;
+      user-select: none;
+    }
+    .card:hover { border-color: #3b82f6; transform: translateY(-1px); }
+    .card.selected { border-color: #3b82f6; background: #172554; }
+    .card-name { font-size: .82rem; font-weight: 600; color: #e2e8f0; margin-bottom: .35rem; line-height: 1.3; }
+    .card-city { font-size: .72rem; color: #64748b; }
+    .card-badges { display: flex; flex-wrap: wrap; gap: .3rem; margin-top: .45rem; }
+    .badge {
+      font-size: .65rem; padding: .15rem .45rem; border-radius: 4px; font-weight: 600;
+    }
+    .badge-email { background: #1d4ed820; color: #60a5fa; border: 1px solid #1d4ed840; }
+    .badge-phone { background: #06474520; color: #34d399; border: 1px solid #06474540; }
+    .badge-score { background: #4c1d9520; color: #a78bfa; border: 1px solid #4c1d9540; }
+    .badge-seq   { background: #78350f20; color: #fbbf24; border: 1px solid #78350f40; }
+    .badge-pres  { background: #1e3a5f20; color: #93c5fd; border: 1px solid #1e3a5f40; }
+
+    /* Seq step dots */
+    .seq-dots { display: flex; gap: 3px; margin-top: .45rem; }
+    .seq-dot {
+      width: 7px; height: 7px; border-radius: 50%;
+      background: #334155;
+    }
+    .seq-dot.done  { background: #10b981; }
+    .seq-dot.sent  { background: #3b82f6; }
+    .seq-dot.open  { background: #f59e0b; }
+
+    /* ── Status dropdown on card ── */
+    .card-actions { display: none; margin-top: .6rem; }
+    .card:hover .card-actions,
+    .card.selected .card-actions { display: flex; gap: .4rem; flex-wrap: wrap; }
+    .card-actions select {
+      flex: 1; background: #1e293b; color: #e2e8f0;
+      border: 1px solid #334155; border-radius: 5px;
+      font-size: .72rem; padding: .25rem .4rem; cursor: pointer;
+    }
+    .card-actions .btn-xs {
+      padding: .25rem .6rem; border-radius: 5px; border: none; cursor: pointer;
+      font-size: .72rem; font-weight: 600;
+    }
+    .btn-xs-seq  { background: #1d4ed8; color: #fff; }
+    .btn-xs-seq:hover { background: #2563eb; }
+
+    /* ── Empty state ── */
+    .empty { text-align: center; color: #334155; font-size: .8rem; padding: 2rem 1rem; }
+
+    /* ── Toast ── */
+    #toast {
+      position: fixed; bottom: 1.5rem; right: 1.5rem;
+      background: #10b981; color: #fff; padding: .7rem 1.3rem;
+      border-radius: 8px; font-size: .85rem; font-weight: 600;
+      opacity: 0; transform: translateY(10px); pointer-events: none;
+      transition: all .3s; z-index: 9999;
+    }
+    #toast.error { background: #ef4444; }
+    #toast.show { opacity: 1; transform: translateY(0); }
+
+    /* ── Score refresh banner ── */
+    .score-banner {
+      background: #1e3a5f; border: 1px solid #1d4ed8; border-radius: 8px;
+      padding: .5rem 1rem; margin: 0 1.5rem .5rem;
+      font-size: .78rem; color: #93c5fd; display: none; align-items: center; gap: .6rem;
+    }
+    .score-banner.show { display: flex; }
+  </style>
+</head>
+<body>
+
+<div class="header">
+  <h1>Syndic<span>Pro</span> Scanner</h1>
+  <nav class="nav-links">
+    <a href="/">Recherche</a>
+    <a href="/dashboard">Command Center</a>
+    <a href="/prospects">Prospects</a>
+    <a href="/pipeline" class="active">Pipeline</a>
+    <a href="/nouveautes">Nouveautés</a>
+  </nav>
+</div>
+
+<!-- KPI bar -->
+<div class="kpi-bar" id="kpiBar">
+  <div class="kpi"><div class="val" id="kTotalProspects">—</div><div class="lbl">Prospects</div></div>
+  <div class="kpi blue"><div class="val" id="kEmailed">—</div><div class="lbl">Contactés</div></div>
+  <div class="kpi accent"><div class="val" id="kOpened">—</div><div class="lbl">Ouvertures uniques</div></div>
+  <div class="kpi accent"><div class="val" id="kTotalOpens">—</div><div class="lbl">Total ouvertures</div></div>
+  <div class="kpi purple"><div class="val" id="kInterested">—</div><div class="lbl">Intéressés</div></div>
+  <div class="kpi accent"><div class="val" id="kClients">—</div><div class="lbl">Clients</div></div>
+  <div class="kpi"><div class="val" id="kOpenRate">—</div><div class="lbl">Taux ouverture</div></div>
+  <div class="kpi accent"><div class="val" id="kMRR">—</div><div class="lbl">MRR estimé</div></div>
+</div>
+
+<div class="toolbar">
+  <button class="btn btn-outline" id="btnScoreAll" onclick="scoreAll()">⚡ Scorer tous</button>
+  <button class="btn btn-primary" id="btnStartSeq" onclick="startSelectedSeq()" disabled>▶ Lancer séquence sélectionnés</button>
+  <button class="btn btn-green" id="btnSendDue" onclick="sendDue()">📤 Envoyer emails dus</button>
+  <button class="btn btn-teal" id="btnRneSync" onclick="startRneSync()">🔍 Détecter nouveaux syndics</button>
+  <button class="btn btn-outline" id="btnSeqNewRne" onclick="seqNewRne()" style="display:none">▶ Séquence nouveaux RNE (<span id="seqNewRneCount">0</span>)</button>
+  <span class="spacer"></span>
+  <span id="selCount" style="font-size:.8rem;color:#64748b"></span>
+  <button class="btn btn-outline" onclick="clearSelection()">Désélectionner tout</button>
+</div>
+
+<!-- Modal résultats sync RNE -->
+<div class="modal-overlay" id="rneSyncModal">
+  <div class="modal">
+    <h3 id="rneSyncTitle">🔍 Synchronisation RNE en cours…</h3>
+    <div id="rneSyncBody">
+      <div style="text-align:center;padding:1.5rem 0;">
+        <div class="spinner"></div>
+        <p style="margin-top:.8rem;color:#64748b;font-size:.85rem">Recherche sur registre-entreprises.tn…</p>
+        <p id="rneSyncTime" style="font-size:.75rem;color:#475569;margin-top:.3rem"></p>
+      </div>
+    </div>
+    <div style="margin-top:1.2rem;text-align:right">
+      <button class="btn btn-outline" onclick="closeRneModal()">Fermer</button>
+    </div>
+  </div>
+</div>
+
+<div class="score-banner" id="scoreBanner"></div>
+
+<div class="board-wrapper">
+  <div class="board" id="board"></div>
+</div>
+
+<div id="toast"></div>
+
+<script>
+const COLUMNS = [
+  { id: 'prospect',   label: 'Prospects',   color: '#64748b' },
+  { id: 'emailed',    label: 'Contactés',   color: '#3b82f6' },
+  { id: 'opened',     label: 'Ouvert email',color: '#f59e0b' },
+  { id: 'interested', label: 'Intéressés',  color: '#10b981' },
+  { id: 'demo',       label: 'Demo',        color: '#a78bfa' },
+  { id: 'client',     label: 'Clients ✅',  color: '#22c55e' },
+];
+
+const MRR_PER_CLIENT = 59; // DT
+let selected = new Set();
+let allData  = {};
+
+// ── Init ──────────────────────────────────────────────────────────────────────
+
+async function init() {
+  buildSkeleton();
+  await Promise.all([loadKPIs(), loadAllColumns()]);
+}
+
+function buildSkeleton() {
+  const board = document.getElementById('board');
+  board.innerHTML = '';
+  COLUMNS.forEach(col => {
+    board.innerHTML += `
+      <div class="column" id="col-${col.id}">
+        <div class="col-header">
+          <span class="col-dot" style="background:${col.color}"></span>
+          <span class="col-title">${col.label}</span>
+          <span class="col-count" id="cnt-${col.id}">0</span>
+        </div>
+        <div class="cards" id="cards-${col.id}"><div class="empty">Chargement…</div></div>
+      </div>`;
+  });
+}
+
+// ── KPIs ──────────────────────────────────────────────────────────────────────
+
+async function loadKPIs() {
+  try {
+    const r = await fetch('/api/pipeline/stats');
+    const d = await r.json();
+    const bs = d.by_status || {};
+    const emailed    = (bs.emailed    ?? 0) + (bs.opened ?? 0) + (bs.interested ?? 0) + (bs.demo ?? 0);
+    const opened     = bs.opened ?? 0;
+    const interested = (bs.interested ?? 0) + (bs.demo   ?? 0);
+    const clients    = bs.client      ?? 0;
+    document.getElementById('kTotalProspects').textContent = d.with_email ?? d.total ?? '—';
+    document.getElementById('kEmailed').textContent        = emailed;
+    document.getElementById('kOpened').textContent         = opened;
+    document.getElementById('kTotalOpens').textContent     = d.total_opens ?? 0;
+    document.getElementById('kInterested').textContent     = interested;
+    document.getElementById('kClients').textContent        = clients;
+    const rate = emailed ? Math.round((opened / emailed) * 100) : 0;
+    document.getElementById('kOpenRate').textContent       = rate + '%';
+    document.getElementById('kMRR').textContent            = (clients * MRR_PER_CLIENT) + ' DT';
+  } catch(e) { console.error('KPI error', e); }
+}
+
+// ── Columns ───────────────────────────────────────────────────────────────────
+
+async function loadAllColumns() {
+  await Promise.all(COLUMNS.map(col => loadColumn(col.id)));
+}
+
+async function loadColumn(status) {
+  const container = document.getElementById(`cards-${status}`);
+  try {
+    const r = await fetch(`/api/pipeline/contacts?status=${status}&limit=200`);
+    const d = await r.json();
+    allData[status] = d.contacts || [];
+    document.getElementById(`cnt-${status}`).textContent = d.count ?? 0;
+    renderColumn(status);
+  } catch(e) {
+    container.innerHTML = '<div class="empty">Erreur chargement</div>';
+  }
+}
+
+function renderColumn(status) {
+  const contacts  = allData[status] || [];
+  const container = document.getElementById(`cards-${status}`);
+  if (!contacts.length) {
+    container.innerHTML = '<div class="empty">Vide</div>';
+    return;
+  }
+  container.innerHTML = contacts.map(c => buildCard(c)).join('');
+}
+
+function buildCard(c) {
+  const isSelected = selected.has(c.id);
+  const badges = [];
+  if (c.email) badges.push(`<span class="badge badge-email">✉ email</span>`);
+  if (c.phone) badges.push(`<span class="badge badge-phone">📞 tél</span>`);
+  if (c.lead_score > 0) badges.push(`<span class="badge badge-score">★ ${c.lead_score}</span>`);
+  if (c.seq_step > 0)   badges.push(`<span class="badge badge-seq">Seq J${c.seq_step}</span>`);
+  if (c.president)      badges.push(`<span class="badge badge-pres">👤</span>`);
+
+  // seq dots (4 steps)
+  let dots = '';
+  if (c.seq_started_at) {
+    dots = '<div class="seq-dots">';
+    for (let i = 1; i <= 4; i++) {
+      const cls = i < c.seq_step ? 'done' : i === c.seq_step ? 'sent' : '';
+      dots += `<div class="seq-dot ${cls}" title="Étape ${i}"></div>`;
+    }
+    dots += '</div>';
+  }
+
+  const statusOptions = ['prospect','emailed','opened','interested','demo','client','lost']
+    .map(s => `<option value="${s}" ${s === c.pipeline_status ? 'selected' : ''}>${s}</option>`)
+    .join('');
+
+  return `
+    <div class="card${isSelected ? ' selected' : ''}" id="card-${c.id}"
+         onclick="toggleSelect(${c.id})">
+      <div class="card-name">${escHtml(c.name || '—')}</div>
+      <div class="card-city">${escHtml(c.city || '')}${c.date_creation ? `<span style="float:right;font-size:.68rem;color:#475569" title="Date création RNE">📅 ${c.date_creation.slice(0,7)}</span>` : ''}</div>
+      ${badges.length ? `<div class="card-badges">${badges.join('')}</div>` : ''}
+      ${dots}
+      <div class="card-actions" onclick="event.stopPropagation()">
+        <select onchange="changeStatus(${c.id}, this.value)">${statusOptions}</select>
+        ${!c.seq_started_at && c.email ? `<button class="btn-xs btn-xs-seq" onclick="startSeqOne(${c.id})">▶ Seq</button>` : ''}
+      </div>
+    </div>`;
+}
+
+// ── Selection ─────────────────────────────────────────────────────────────────
+
+function toggleSelect(id) {
+  if (selected.has(id)) selected.delete(id);
+  else selected.add(id);
+  document.getElementById(`card-${id}`)?.classList.toggle('selected', selected.has(id));
+  updateSelUI();
+}
+
+function clearSelection() {
+  selected.clear();
+  document.querySelectorAll('.card.selected').forEach(el => el.classList.remove('selected'));
+  updateSelUI();
+}
+
+function updateSelUI() {
+  const n = selected.size;
+  document.getElementById('selCount').textContent = n ? `${n} sélectionné(s)` : '';
+  document.getElementById('btnStartSeq').disabled = n === 0;
+}
+
+// ── Actions ───────────────────────────────────────────────────────────────────
+
+async function changeStatus(id, status) {
+  try {
+    await fetch(`/api/pipeline/${id}/status`, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({status})
+    });
+    toast(`Statut → ${status}`);
+    setTimeout(() => { loadAllColumns(); loadKPIs(); }, 400);
+  } catch(e) { toast('Erreur mise à jour', true); }
+}
+
+async function startSeqOne(id) {
+  await startSeqForIds([id]);
+}
+
+async function startSelectedSeq() {
+  if (!selected.size) return;
+  await startSeqForIds([...selected]);
+  clearSelection();
+}
+
+async function startSeqForIds(ids) {
+  try {
+    const r = await fetch('/api/sequence/start', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ids})
+    });
+    const d = await r.json();
+    toast(`✅ Séquence lancée pour ${d.started} contact(s)`);
+    setTimeout(() => loadAllColumns(), 500);
+  } catch(e) { toast('Erreur lancement séquence', true); }
+}
+
+async function sendDue() {
+  document.getElementById('btnSendDue').disabled = true;
+  document.getElementById('btnSendDue').textContent = 'Envoi…';
+  try {
+    const r = await fetch('/api/sequence/send-due', {method:'POST'});
+    const d = await r.json();
+    toast(`📤 ${d.sent} email(s) envoyé(s) — ${d.errors} erreur(s)`);
+    setTimeout(() => { loadKPIs(); loadAllColumns(); }, 800);
+  } catch(e) { toast('Erreur envoi', true); }
+  finally {
+    document.getElementById('btnSendDue').disabled = false;
+    document.getElementById('btnSendDue').textContent = '📤 Envoyer emails dus';
+  }
+}
+
+async function scoreAll() {
+  const btn = document.getElementById('btnScoreAll');
+  btn.disabled = true; btn.textContent = '⏳ Scoring…';
+  try {
+    const r = await fetch('/api/leads/score-all', {method:'POST'});
+    const d = await r.json();
+    const banner = document.getElementById('scoreBanner');
+    banner.className = 'score-banner show';
+    banner.textContent = `⚡ ${d.scored} contacts scorés — score moyen: ${d.avg_score} — top leads (≥50): ${d.top_leads} — disqualifiés: ${d.disqualified}`;
+    toast('Scoring terminé');
+    setTimeout(() => loadAllColumns(), 400);
+  } catch(e) { toast('Erreur scoring', true); }
+  finally { btn.disabled = false; btn.textContent = '⚡ Scorer tous'; }
+}
+
+// ── Utils ─────────────────────────────────────────────────────────────────────
+
+function toast(msg, isError = false) {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.className = 'show' + (isError ? ' error' : '');
+  setTimeout(() => t.className = '', 3000);
+}
+
+function escHtml(str) {
+  return String(str)
+    .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+    .replace(/"/g,'&quot;');
+}
+
+// Auto-refresh KPIs toutes les 60s
+setInterval(() => { loadKPIs(); }, 60000);
+
+init();
+
+// ── Sync RNE + enrichissement automatique ─────────────────────────────────────
+
+let _rnePollTimer = null;
+
+async function startRneSync() {
+  const btn = document.getElementById('btnRneSync');
+  btn.disabled = true;
+  btn.textContent = '⏳ En cours…';
+  _renderPhaseSync();
+  document.getElementById('rneSyncModal').classList.add('open');
+
+  try {
+    const r = await fetch('/api/rne/sync', { method: 'POST' });
+    const d = await r.json();
+    if (!d.ok) { _rneError(d.error || 'Erreur'); _btnReset(); return; }
+  } catch (e) {
+    _rneError('Serveur inaccessible'); _btnReset(); return;
+  }
+
+  _rnePollTimer = setInterval(_rnePoll, 2500);
+}
+
+async function _rnePoll() {
+  try {
+    const r = await fetch('/api/rne/sync/status');
+    const s = await r.json();
+    const phase = s.phase;
+
+    if (phase === 'sync') {
+      _renderPhaseSync();
+    } else if (phase === 'enrich') {
+      _renderPhaseEnrich(s);
+    } else if (phase === 'done') {
+      clearInterval(_rnePollTimer); _rnePollTimer = null;
+      _btnReset();
+      _renderDone(s);
+      loadBoard(); loadKPIs();
+    } else if (phase === 'error') {
+      clearInterval(_rnePollTimer); _rnePollTimer = null;
+      _btnReset();
+      _rneError(s.error || 'Erreur inconnue');
+    }
+  } catch (_) {}
+}
+
+function _renderPhaseSync() {
+  document.getElementById('rneSyncTitle').textContent = 'Phase 1 — Détection RNE';
+  document.getElementById('rneSyncBody').innerHTML = `
+    <div style="display:flex;align-items:center;gap:.8rem;padding:.5rem 0">
+      <div class="spinner"></div>
+      <span style="color:#94a3b8;font-size:.88rem">Recherche sur registre-entreprises.tn…</span>
+    </div>
+    <p style="font-size:.75rem;color:#475569;margin-top:.4rem">Comparaison avec les 1427 syndics en base…</p>`;
+}
+
+function _renderPhaseEnrich(s) {
+  const done  = s.enrich_done  || 0;
+  const total = s.enrich_total || 1;
+  const pct   = Math.round(done / total * 100);
+  const sr    = s.sync_result  || {};
+  document.getElementById('rneSyncTitle').textContent = 'Phase 2 — Enrichissement';
+  document.getElementById('rneSyncBody').innerHTML = `
+    <div class="sync-stat">
+      <span class="label">Nouveaux syndics détectés</span>
+      <span class="value green">${sr.new || 0}</span>
+    </div>
+    <div class="sync-stat">
+      <span class="label">Mises à jour RNE</span>
+      <span class="value amber">${sr.updated || 0}</span>
+    </div>
+    <div style="margin:.9rem 0 .3rem;font-size:.8rem;color:#64748b">
+      Enrichissement ${done}/${total} — ${pct}%
+    </div>
+    <div style="background:#0f172a;border-radius:6px;height:8px;overflow:hidden">
+      <div style="height:100%;width:${pct}%;background:#3b82f6;transition:width .4s"></div>
+    </div>
+    <div style="margin-top:.6rem;font-size:.75rem;color:#475569;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">
+      ${s.current_name || '…'}
+    </div>
+    <div style="margin-top:.7rem;display:flex;gap:1.2rem">
+      <span style="font-size:.85rem;color:#10b981">📧 ${s.enrich_emails || 0} emails</span>
+      <span style="font-size:.85rem;color:#3b82f6">📞 ${s.enrich_phones || 0} tél</span>
+    </div>`;
+}
+
+function _renderDone(s) {
+  const sr = s.sync_result || {};
+  document.getElementById('rneSyncTitle').textContent = '✅ Pipeline terminé';
+  document.getElementById('rneSyncBody').innerHTML = `
+    <div class="sync-stat"><span class="label">Syndics sur le RNE</span><span class="value">${sr.total_rne || 0}</span></div>
+    <div class="sync-stat"><span class="label">Nouveaux prospects ajoutés</span><span class="value green">${sr.new || 0}</span></div>
+    <div class="sync-stat"><span class="label">Mises à jour détectées</span><span class="value amber">${sr.updated || 0}</span></div>
+    <div style="border-top:1px solid #334155;margin:.8rem 0"></div>
+    <div class="sync-stat"><span class="label">Emails trouvés</span><span class="value green">📧 ${s.enrich_emails || 0}</span></div>
+    <div class="sync-stat"><span class="label">Téléphones trouvés</span><span class="value blue">📞 ${s.enrich_phones || 0}</span></div>
+    ${(sr.new_names||[]).length > 0 ? `<div class="sync-names"><strong>Nouveaux :</strong><br>${sr.new_names.join('<br>')}</div>` : ''}`;
+}
+
+function _rneError(msg) {
+  document.getElementById('rneSyncTitle').textContent = '❌ Erreur';
+  document.getElementById('rneSyncBody').innerHTML = `<p style="color:#f87171;font-size:.9rem">${msg}</p>`;
+}
+
+function _btnReset() {
+  const btn = document.getElementById('btnRneSync');
+  btn.disabled = false;
+  btn.textContent = '🔍 Détecter nouveaux syndics';
+}
+
+function closeRneModal() {
+  document.getElementById('rneSyncModal').classList.remove('open');
+  if (_rnePollTimer) { clearInterval(_rnePollTimer); _rnePollTimer = null; }
+}
+
+// ── Séquence nouveaux RNE uniquement ─────────────────────────────────────────
+
+async function checkSeqNewRneBadge() {
+  try {
+    const r = await fetch('/api/seq/new-rne/count');
+    const d = await r.json();
+    const n = d.count || 0;
+    const btn = document.getElementById('btnSeqNewRne');
+    document.getElementById('seqNewRneCount').textContent = n;
+    btn.style.display = n > 0 ? '' : 'none';
+  } catch (_) {}
+}
+
+async function seqNewRne() {
+  const btn = document.getElementById('btnSeqNewRne');
+  const n = parseInt(document.getElementById('seqNewRneCount').textContent) || 0;
+  if (!confirm(`Lancer la séquence email pour ${n} nouveau(x) syndic(s) RNE ?\n\nCeux qui ont déjà reçu un email ne seront pas recontactés.`)) return;
+  btn.disabled = true;
+  try {
+    const r = await fetch('/api/seq/start-new-rne', { method: 'POST' });
+    const d = await r.json();
+    if (d.ok) {
+      toast(`✅ Séquence lancée pour ${d.started} syndic(s)`);
+      loadBoard(); loadKPIs();
+      checkSeqNewRneBadge();
+    } else {
+      toast('Erreur lors du lancement', true);
+    }
+  } catch (e) {
+    toast('Erreur serveur', true);
+  }
+  btn.disabled = false;
+}
+
+// Vérifier au chargement et après chaque sync
+checkSeqNewRneBadge();
+setInterval(checkSeqNewRneBadge, 30000);
+</script>
+</body>
+</html>

@@ -1,0 +1,478 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Nouveautés — SyndicPro Scanner</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+           background: #0f172a; color: #e2e8f0; min-height: 100vh; }
+
+    .header { background: #1e293b; border-bottom: 1px solid #334155;
+              padding: .9rem 1.5rem; display: flex; align-items: center; gap: 1rem; }
+    .header h1 { font-size: 1.1rem; font-weight: 700; color: #f1f5f9; }
+    .header h1 span { color: #3b82f6; }
+    .nav-links { display: flex; gap: .4rem; margin-left: auto; }
+    .nav-links a { color: #94a3b8; text-decoration: none; font-size: .83rem;
+                   padding: .3rem .7rem; border-radius: 6px; transition: .15s; }
+    .nav-links a:hover, .nav-links a.active { color: #fff; background: #334155; }
+
+    /* ── Layout ── */
+    .page { padding: 1.25rem 1.5rem 3rem; display: flex; flex-direction: column; gap: 1.25rem; }
+
+    /* ── KPI strip ── */
+    .kpi-row { display: flex; gap: .9rem; flex-wrap: wrap; }
+    .kpi { background: #1e293b; border: 1px solid #334155; border-radius: 10px;
+           padding: .8rem 1.2rem; min-width: 130px; }
+    .kpi::before { content:''; display:block; height:3px; border-radius:2px;
+                   background: var(--c,#3b82f6); margin-bottom:.6rem; }
+    .kpi.g { --c:#10b981; } .kpi.a { --c:#f59e0b; } .kpi.r { --c:#f87171; } .kpi.t { --c:#0d9488; }
+    .kpi-val { font-size: 1.8rem; font-weight: 800; color: var(--c,#3b82f6); line-height: 1; }
+    .kpi-lbl { font-size: .7rem; color: #64748b; text-transform: uppercase;
+               letter-spacing: .05em; margin-top: .3rem; }
+
+    /* ── Section ── */
+    .section { background: #1e293b; border: 1px solid #334155; border-radius: 12px; overflow: hidden; }
+    .section-head {
+      padding: .9rem 1.25rem; display: flex; align-items: center; gap: .75rem;
+      border-bottom: 1px solid #334155; cursor: pointer; user-select: none;
+    }
+    .section-head:hover { background: #243044; }
+    .section-icon { font-size: 1.1rem; }
+    .section-title { font-weight: 700; font-size: .95rem; color: #f1f5f9; }
+    .section-sub   { font-size: .78rem; color: #64748b; margin-left: auto; }
+    .section-badge { background: rgba(59,130,246,.15); color: #60a5fa; font-size: .72rem;
+                     font-weight: 700; padding: .15rem .55rem; border-radius: 99px; }
+    .section-badge.green { background: rgba(16,185,129,.15); color: #34d399; }
+    .section-badge.amber { background: rgba(245,158,11,.15);  color: #fbbf24; }
+    .section-badge.red   { background: rgba(248,113,113,.15); color: #f87171; }
+    .chevron { color: #475569; transition: transform .2s; margin-left: .5rem; }
+    .chevron.open { transform: rotate(180deg); }
+    .section-body { display: none; padding: 0; }
+    .section-body.open { display: block; }
+
+    /* ── Tables ── */
+    table { width: 100%; border-collapse: collapse; font-size: .82rem; }
+    th { color: #475569; font-size: .68rem; text-transform: uppercase; letter-spacing: .05em;
+         padding: .6rem 1rem; text-align: left; border-bottom: 1px solid #334155;
+         background: #162032; white-space: nowrap; }
+    td { padding: .55rem 1rem; border-bottom: 1px solid #1e293b; vertical-align: middle; }
+    tr:last-child td { border-bottom: none; }
+    tr:hover td { background: #162032; }
+    a { color: #3b82f6; text-decoration: none; }
+    a:hover { text-decoration: underline; }
+
+    /* ── Statut email ── */
+    .status { display: inline-flex; align-items: center; gap: .35rem;
+              font-size: .72rem; font-weight: 700; padding: .18rem .6rem;
+              border-radius: 99px; white-space: nowrap; }
+    .status-found   { background: rgba(16,185,129,.15); color: #34d399; border: 1px solid rgba(16,185,129,.25); }
+    .status-missing { background: rgba(100,116,139,.12); color: #64748b; border: 1px solid #334155; }
+    .status-seq     { background: rgba(59,130,246,.15);  color: #60a5fa; border: 1px solid rgba(59,130,246,.25); }
+    .status-upd     { background: rgba(245,158,11,.15);  color: #fbbf24; border: 1px solid rgba(245,158,11,.25); }
+
+    /* ── Score pill ── */
+    .score { display: inline-block; padding: .15rem .5rem; border-radius: 99px;
+             font-size: .72rem; font-weight: 700; }
+    .score-hi { background: rgba(16,185,129,.15); color: #34d399; }
+    .score-mi { background: rgba(245,158,11,.15);  color: #fbbf24; }
+    .score-lo { background: rgba(100,116,139,.12); color: #64748b; }
+
+    /* ── Multi block ── */
+    .multi-card { border-bottom: 1px solid #1e293b; padding: .9rem 1.25rem; }
+    .multi-card:last-child { border-bottom: none; }
+    .multi-card:hover { background: #162032; }
+    .multi-head { display: flex; align-items: center; gap: .75rem; margin-bottom: .5rem; }
+    .multi-email { font-weight: 700; color: #f1f5f9; font-size: .9rem; }
+    .multi-count { font-size: .72rem; font-weight: 700; background: rgba(59,130,246,.15);
+                   color: #60a5fa; padding: .18rem .55rem; border-radius: 99px; }
+    .multi-residences { display: flex; flex-wrap: wrap; gap: .4rem; }
+    .res-chip { background: #0f172a; border: 1px solid #334155; border-radius: 6px;
+                padding: .25rem .65rem; font-size: .75rem; color: #94a3b8; }
+    .res-chip strong { color: #e2e8f0; }
+    .res-chip .city { color: #475569; font-size: .7rem; }
+
+    .multi-seq-row { margin-top: .55rem; }
+    .btn-seq-multi { background: linear-gradient(135deg,#1D4ED8,#1e40af); color: #fff;
+                     border: none; border-radius: 6px; padding: .35rem .85rem;
+                     font-size: .78rem; font-weight: 600; cursor: pointer; transition: opacity .15s; }
+    .btn-seq-multi:hover { opacity: .85; }
+    .btn-seq-multi:disabled { opacity: .5; cursor: default; }
+
+    /* ── Empty state ── */
+    .empty { padding: 2rem 1.25rem; text-align: center; color: #334155; font-size: .85rem; }
+
+    /* ── Date cell ── */
+    .date-cell { font-size: .75rem; color: #475569; white-space: nowrap; }
+    .date-new   { color: #0d9488; font-weight: 600; }
+
+    /* ── Action buttons ── */
+    .btn { padding: .4rem .9rem; border-radius: 7px; border: none; cursor: pointer;
+           font-size: .8rem; font-weight: 600; transition: .15s; }
+    .btn-primary { background: #3b82f6; color: #fff; }
+    .btn-primary:hover { background: #2563eb; }
+    .btn-teal { background: #0d9488; color: #fff; }
+    .btn-teal:hover { background: #0f766e; }
+    .btn-outline { background: transparent; color: #94a3b8; border: 1px solid #334155; }
+    .btn-outline:hover { color: #e2e8f0; border-color: #64748b; }
+    .btn:disabled { opacity: .4; cursor: not-allowed; }
+
+    /* ── Toolbar actions ── */
+    .action-bar { padding: .75rem 1.25rem; background: #162032;
+                  border-top: 1px solid #334155; display: flex; gap: .6rem; align-items: center; }
+    .action-info { font-size: .78rem; color: #475569; margin-left: auto; }
+
+    /* ── Toast ── */
+    #toast { position: fixed; bottom: 1.5rem; right: 1.5rem; z-index: 999; }
+    .t { background: #1e293b; border: 1px solid #334155; border-radius: 8px;
+         padding: .6rem 1rem; font-size: .83rem; color: #f1f5f9;
+         animation: fi .2s; margin-top: .4rem; }
+    @keyframes fi { from { opacity:0; transform:translateY(6px); } to { opacity:1; } }
+
+    /* ── Spinner ── */
+    .spinner { display: inline-block; width: 14px; height: 14px;
+               border: 2px solid #334155; border-top-color: #3b82f6;
+               border-radius: 50%; animation: spin .7s linear infinite; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+  </style>
+</head>
+<body>
+
+<div class="header">
+  <h1>🔍 <span>SyndicPro</span> Scanner</h1>
+  <div class="nav-links">
+    <a href="/">Recherche</a>
+    <a href="/dashboard">Command Center</a>
+    <a href="/prospects">Prospects</a>
+    <a href="/pipeline">Pipeline</a>
+    <a href="/nouveautes" class="active">Nouveautés</a>
+  </div>
+</div>
+
+<div class="page">
+
+  <!-- ── KPIs ── -->
+  <div class="kpi-row" id="kpiRow">
+    <div class="kpi">    <div class="kpi-val" id="kTotal">—</div><div class="kpi-lbl">Nouveaux détectés</div></div>
+    <div class="kpi g">  <div class="kpi-val" id="kEmail">—</div><div class="kpi-lbl">Avec email trouvé</div></div>
+    <div class="kpi a">  <div class="kpi-val" id="kPending">—</div><div class="kpi-lbl">En attente enrichissement</div></div>
+    <div class="kpi t">  <div class="kpi-val" id="kMulti">—</div><div class="kpi-lbl">Multi-gestionnaires</div></div>
+    <div class="kpi r">  <div class="kpi-val" id="kUpdated">—</div><div class="kpi-lbl">MAJ RNE détectées</div></div>
+  </div>
+
+  <!-- ── Section 1 : Multi-gestionnaires ── -->
+  <div class="section" id="secMulti">
+    <div class="section-head" onclick="toggle('secMulti')">
+      <span class="section-icon">🔥</span>
+      <span class="section-title">Multi-gestionnaires</span>
+      <span class="section-badge green" id="badgeMulti">—</span>
+      <span class="section-sub">Même email → plusieurs résidences = prospects chauds</span>
+      <span class="chevron" id="chevMulti">▼</span>
+    </div>
+    <div class="section-body open" id="bodyMulti">
+      <div id="multiList"><div class="empty"><div class="spinner"></div></div></div>
+      <div class="action-bar" id="multiActions" style="display:none">
+        <button class="btn btn-primary" id="btnSeqMulti" onclick="seqMulti()">▶ Séquence B2B — Tous les multi-gestionnaires</button>
+        <span class="action-info" id="multiActionInfo"></span>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Section 2 : Nouveaux syndics RNE ── -->
+  <div class="section" id="secNew">
+    <div class="section-head" onclick="toggle('secNew')">
+      <span class="section-icon">🆕</span>
+      <span class="section-title">Nouveaux syndics détectés via RNE</span>
+      <span class="section-badge" id="badgeNew">—</span>
+      <span class="section-sub" id="subNew">Dernière sync : —</span>
+      <span class="chevron open" id="chevNew">▼</span>
+    </div>
+    <div class="section-body open" id="bodyNew">
+      <table>
+        <thead>
+          <tr>
+            <th>Résidence</th>
+            <th>Ville</th>
+            <th>Email</th>
+            <th>Téléphone</th>
+            <th>Créé RNE</th>
+            <th>Score</th>
+            <th>Statut</th>
+          </tr>
+        </thead>
+        <tbody id="newBody">
+          <tr><td colspan="7"><div class="empty"><div class="spinner"></div></div></td></tr>
+        </tbody>
+      </table>
+      <div class="action-bar" id="newActions" style="display:none">
+        <button class="btn btn-teal" onclick="location.href='/pipeline'">🔍 Détecter + enrichir depuis Pipeline</button>
+        <button class="btn btn-primary" id="btnSeqNew" onclick="seqNewRne()">▶ Lancer séquence sur les nouveaux avec email</button>
+        <span class="action-info" id="newActionInfo"></span>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Section 3 : MAJ RNE ── -->
+  <div class="section" id="secUpd">
+    <div class="section-head" onclick="toggle('secUpd')">
+      <span class="section-icon">🔄</span>
+      <span class="section-title">Mises à jour RNE détectées</span>
+      <span class="section-badge amber" id="badgeUpd">0</span>
+      <span class="section-sub">Syndics dont les informations ont changé au RNE</span>
+      <span class="chevron" id="chevUpd">▼</span>
+    </div>
+    <div class="section-body" id="bodyUpd">
+      <div id="updBody"><div class="empty">Aucune mise à jour détectée pour l'instant.</div></div>
+    </div>
+  </div>
+
+</div>
+
+<div id="toast"></div>
+
+<script>
+let _data = null;
+
+async function init() {
+  const r = await fetch('/api/nouveautes');
+  _data = await r.json();
+  renderKPIs();
+  renderMulti();
+  renderNew();
+  renderUpdated();
+}
+
+// ── KPIs ──────────────────────────────────────────────────────────────────────
+function renderKPIs() {
+  const s = _data.stats_new || {};
+  set('kTotal',   s.total   || 0);
+  set('kEmail',   s.with_email || 0);
+  set('kPending', s.no_email   || 0);
+  set('kMulti',   _data.multi?.length || 0);
+  set('kUpdated', _data.updated?.length || 0);
+}
+
+// ── Multi-gestionnaires ───────────────────────────────────────────────────────
+function renderMulti() {
+  const multi = _data.multi || [];
+  set('badgeMulti', multi.length + ' gestionnaires');
+  document.getElementById('badgeMulti').className =
+    'section-badge ' + (multi.length > 0 ? 'green' : '');
+
+  if (!multi.length) {
+    document.getElementById('multiList').innerHTML =
+      '<div class="empty">Aucun multi-gestionnaire détecté.</div>';
+    return;
+  }
+
+  document.getElementById('multiList').innerHTML = multi.map(m => {
+    const hotness  = m.count >= 5 ? '🔥🔥🔥' : m.count >= 4 ? '🔥🔥' : m.count >= 3 ? '🔥' : '';
+    const tierBadge = m.count >= 5 ? '<span style="background:#7c3aed;color:#fff;font-size:.7rem;padding:.2rem .5rem;border-radius:4px;margin-left:.4rem">PARTENAIRE</span>'
+                    : m.count >= 3 ? '<span style="background:#0284c7;color:#fff;font-size:.7rem;padding:.2rem .5rem;border-radius:4px;margin-left:.4rem">PRO</span>'
+                    : '';
+    const res = m.residences.map(r =>
+      `<div class="res-chip"><strong>${esc(r.name.replace(/\s{2,}/g,' ').trim())}</strong>
+       <span class="city"> · ${esc(r.city||'—')}</span></div>`
+    ).join('');
+    const totalRes  = m.count;
+    const mrrMin    = totalRes * 29;
+    const mrrMax    = totalRes * 99;
+    const emailEnc  = encodeURIComponent(m.email);
+    const seqBtn    = m.email
+      ? `<button onclick="seqOneMulti('${esc(m.email)}')" class="btn-seq-multi" title="Lancer séquence B2B personnalisée">▶ Séquence multi (${totalRes} résidences)</button>`
+      : `<span style="color:#475569;font-size:.8rem">pas d'email</span>`;
+    return `<div class="multi-card" id="mc-${emailEnc}">
+      <div class="multi-head">
+        <span class="multi-email">${hotness} <a href="mailto:${esc(m.email)}">${esc(m.email)}</a>${tierBadge}</span>
+        <span class="multi-count">${totalRes} résidences</span>
+        <span style="font-size:.75rem;color:#10b981;margin-left:.8rem">💰 ${mrrMin}–${mrrMax} DT/mois</span>
+        <span style="font-size:.75rem;color:#64748b;margin-left:.4rem">(29–99 DT/résidence selon taille)</span>
+      </div>
+      <div class="multi-residences">${res}</div>
+      <div class="multi-seq-row">${seqBtn}</div>
+    </div>`;
+  }).join('');
+
+  // Compter les multi avec email mais sans séquence
+  const eligible = multi.filter(m => m.email).length;
+  if (eligible > 0) {
+    document.getElementById('multiActions').style.display = 'flex';
+    document.getElementById('multiActionInfo').textContent =
+      `${eligible} gestionnaire(s) éligible(s) — séquence B2B personnalisée`;
+  }
+}
+
+// ── Nouveaux syndics RNE ──────────────────────────────────────────────────────
+function renderNew() {
+  const rows = _data.new_syndics || [];
+  const s    = _data.stats_new   || {};
+
+  set('badgeNew', rows.length);
+  document.getElementById('subNew').textContent = `Dernière sync : ${_data.last_sync || '—'}`;
+
+  if (!rows.length) {
+    document.getElementById('newBody').innerHTML =
+      '<tr><td colspan="7"><div class="empty">Aucun nouveau syndic détecté. Lance une sync depuis le Pipeline.</div></td></tr>';
+    return;
+  }
+
+  document.getElementById('newBody').innerHTML = rows.map(r => {
+    const hasEmail = r.email && r.email !== '';
+    const emailCell = hasEmail
+      ? `<a href="mailto:${esc(r.email)}">${esc(r.email)}</a>`
+      : `<span style="color:#334155">—</span>`;
+    const phoneCell = r.phone
+      ? `<a href="tel:${esc(r.phone)}">${esc(r.phone)}</a>`
+      : `<span style="color:#334155">—</span>`;
+    const dateCr = r.date_creation
+      ? `<span class="date-new">📅 ${r.date_creation.slice(0,7)}</span>`
+      : `<span class="date-cell">—</span>`;
+    const sc = r.lead_score || 0;
+    const scCls = sc >= 60 ? 'score-hi' : sc >= 30 ? 'score-mi' : 'score-lo';
+
+    let statusHtml;
+    if (r.seq_started_at) {
+      statusHtml = `<span class="status status-seq">▶ Seq étape ${r.seq_step}/4</span>`;
+    } else if (hasEmail) {
+      statusHtml = `<span class="status status-found">✉ Email prêt</span>`;
+    } else {
+      statusHtml = `<span class="status status-missing">⏳ À enrichir</span>`;
+    }
+
+    return `<tr>
+      <td style="max-width:200px">
+        <div style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#f1f5f9;font-weight:600"
+             title="${esc(r.name)}">${esc(r.name.replace(/\s{2,}/g,' ').trim())}</div>
+      </td>
+      <td style="color:#64748b;font-size:.78rem">${esc(r.city||'—')}</td>
+      <td style="font-size:.78rem">${emailCell}</td>
+      <td style="font-size:.78rem">${phoneCell}</td>
+      <td>${dateCr}</td>
+      <td><span class="score ${scCls}">${sc}</span></td>
+      <td>${statusHtml}</td>
+    </tr>`;
+  }).join('');
+
+  document.getElementById('newActions').style.display = 'flex';
+  const withEmail = s.with_email || 0;
+  const noSeq     = rows.filter(r => r.email && !r.seq_started_at).length;
+  document.getElementById('newActionInfo').textContent =
+    `${withEmail} avec email · ${noSeq} sans séquence`;
+}
+
+// ── Mises à jour RNE ──────────────────────────────────────────────────────────
+function renderUpdated() {
+  const rows = _data.updated || [];
+  set('badgeUpd', rows.length);
+  if (!rows.length) return;
+
+  document.getElementById('updBody').innerHTML = `
+    <table>
+      <thead><tr><th>Résidence</th><th>Ville</th><th>Email</th><th>Tél</th><th>Vérifié le</th></tr></thead>
+      <tbody>${rows.map(r => `<tr>
+        <td style="color:#f1f5f9;font-weight:600">${esc(r.name.replace(/\s{2,}/g,' ').trim())}</td>
+        <td style="color:#64748b">${esc(r.city||'—')}</td>
+        <td>${r.email ? `<a href="mailto:${esc(r.email)}">${esc(r.email)}</a>` : '<span style="color:#334155">—</span>'}</td>
+        <td style="color:#60a5fa">${r.phone||'—'}</td>
+        <td><span class="status status-upd">🔄 ${(r.rne_sync_at||'').slice(0,10)}</span></td>
+      </tr>`).join('')}</tbody>
+    </table>`;
+}
+
+// ── Actions séquence ──────────────────────────────────────────────────────────
+async function seqNewRne() {
+  const btn = document.getElementById('btnSeqNew');
+  const n   = (_data.new_syndics||[]).filter(r => r.email && !r.seq_started_at).length;
+  if (!n) { toast('Aucun nouveau avec email sans séquence'); return; }
+  if (!confirm(`Lancer la séquence email pour ${n} nouveau(x) syndic(s) RNE ?\n\nCeux qui ont déjà reçu un email ne seront pas recontactés.`)) return;
+  btn.disabled = true;
+  const r = await fetch('/api/seq/start-new-rne', { method: 'POST' });
+  const d = await r.json();
+  if (d.ok) {
+    toast(`✅ Séquence lancée pour ${d.started} syndic(s)`);
+    await init();
+  } else {
+    toast('Erreur : ' + (d.error||'?'));
+  }
+  btn.disabled = false;
+}
+
+async function seqOneMulti(email) {
+  if (!email) return;
+  const m = (_data.multi||[]).find(x => x.email === email);
+  const count = m ? m.count : '?';
+  if (!confirm(`Lancer la séquence B2B personnalisée pour ${email} (${count} résidences) ?\n\nCette séquence utilise des emails professionnels spécialement conçus pour les gestionnaires multi-résidences.`)) return;
+
+  const card = document.getElementById('mc-' + encodeURIComponent(email));
+  if (card) card.style.opacity = '0.5';
+
+  const r = await fetch('/api/seq/start-multi', {
+    method: 'POST', headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({ email })
+  });
+  const d = await r.json();
+  if (d.ok) {
+    toast(`✅ Séquence B2B lancée — ${count} résidences consolidées`);
+    if (card) {
+      const btn = card.querySelector('.btn-seq-multi');
+      if (btn) { btn.textContent = '✅ Séquence lancée'; btn.disabled = true; btn.style.background='#10b981'; }
+      card.style.opacity = '1';
+    }
+    await init();
+  } else {
+    toast('Erreur : ' + (d.error || 'inconnue'));
+    if (card) card.style.opacity = '1';
+  }
+}
+
+async function seqMulti() {
+  const btn = document.getElementById('btnSeqMulti');
+  const eligible = (_data.multi||[]).filter(m => m.email);
+  if (!eligible.length) { toast('Aucun gestionnaire éligible'); return; }
+  if (!confirm(`Lancer la séquence B2B professionnelle pour TOUS les ${eligible.length} multi-gestionnaires ?\n\nChaque gestionnaire recevra des emails personnalisés mentionnant son nombre de résidences.`)) return;
+  btn.disabled = true;
+  btn.textContent = '⏳ En cours…';
+
+  let launched = 0;
+  for (const m of eligible) {
+    const r = await fetch('/api/seq/start-multi', {
+      method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ email: m.email })
+    });
+    const d = await r.json();
+    if (d.ok) launched++;
+  }
+  toast(`✅ Séquences B2B lancées pour ${launched}/${eligible.length} gestionnaires`);
+  btn.textContent = `✅ ${launched} séquences lancées`;
+  await init();
+  btn.disabled = false;
+}
+
+// ── Toggle section ────────────────────────────────────────────────────────────
+function toggle(secId) {
+  const bodyId  = 'body' + secId.replace('sec', '');
+  const chevId  = 'chev' + secId.replace('sec', '');
+  const body    = document.getElementById(bodyId);
+  const chev    = document.getElementById(chevId);
+  if (!body) return;
+  const open = body.classList.toggle('open');
+  if (chev) chev.classList.toggle('open', open);
+}
+
+// ── Utils ─────────────────────────────────────────────────────────────────────
+function set(id, v) { const el = document.getElementById(id); if (el) el.textContent = v; }
+function esc(s) {
+  return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+function toast(msg) {
+  const t = document.createElement('div');
+  t.className = 't'; t.textContent = msg;
+  document.getElementById('toast').appendChild(t);
+  setTimeout(() => t.remove(), 3500);
+}
+
+init();
+</script>
+</body>
+</html>

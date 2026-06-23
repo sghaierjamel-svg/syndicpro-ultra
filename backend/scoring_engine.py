@@ -6,7 +6,7 @@ Améliorations :
   - Seuil minimum de poids pour afficher un résultat
 """
 
-HIGH_TRUST_SOURCES = {"rne_borne", "rne_entite", "rne", "pagesjaunes", "yellow_tn", "crawler", "facebook", "11880", "truecaller", "mubawab"}
+HIGH_TRUST_SOURCES = {"rne_borne", "rne_entite", "rne", "pagesjaunes", "yellow_tn", "crawler", "facebook", "facebook_deep", "11880", "truecaller", "mubawab", "address_search", "instagram"}
 
 # Poids de vote par source — plus élevé = plus fiable
 SOURCE_WEIGHTS = {
@@ -17,9 +17,13 @@ SOURCE_WEIGHTS = {
     "yellow_tn":      3.0,
     "11880":          3.0,
     "truecaller":     3.0,
+    "address_search": 3.0,   # adresse officielle RNE → très fiable
     "mubawab":        2.5,
     "crawler":        2.0,
     "facebook":       2.0,
+    "facebook_deep":  2.0,
+    "instagram":      2.0,
+    "google_local":   1.5,
     "google_maps":    1.5,
     "member_contact": 1.5,
     "ddg":            1.0,
@@ -55,6 +59,8 @@ def compute_conformity(results):
     members       = []
     address       = ""
     rne_id_found  = ""
+    date_creation = ""
+    city_rne      = ""
 
     for r in results:
         src      = r.get("source", "?")
@@ -89,6 +95,10 @@ def compute_conformity(results):
             address = r["address"]
         if r.get("rne_id_found") and not rne_id_found:
             rne_id_found = r["rne_id_found"]
+        if r.get("date_creation") and not date_creation:
+            date_creation = r["date_creation"]
+        if r.get("city_rne") and not city_rne:
+            city_rne = r["city_rne"]
 
     def _best_score(counts, sources_map):
         if not counts:
@@ -120,16 +130,21 @@ def compute_conformity(results):
 
         return best, round(raw, 1)
 
-    # Filtrer les emails de domaines étrangers sans rapport (recettes, news…)
+    # Filtrer uniquement les domaines clairement hors-sujet (sites de recettes, news…)
+    # NE PAS blacklister gmail/yahoo/hotmail — les syndics tunisiens les utilisent massivement
     _EMAIL_DOMAIN_BLACKLIST = {
         '750g.com', 'marmiton.org', 'recettesparisiennes.com', 'cuisineaz.com',
         'lefigaro.fr', 'lemonde.fr', 'leparisien.fr', 'wikipedia.org',
-        'gmail.com', 'yahoo.fr', 'hotmail.fr', 'outlook.com',
+        'sentry.io', 'example.com', 'test.com', 'noreply.com',
     }
     email_count = {e: v for e, v in email_count.items()
-                   if e.split('@')[-1] not in _EMAIL_DOMAIN_BLACKLIST}
+                   if e.split('@')[-1] not in _EMAIL_DOMAIN_BLACKLIST
+                   and not e.startswith('noreply')
+                   and not e.startswith('no-reply')}
     email_sources = {e: v for e, v in email_sources.items()
-                     if e.split('@')[-1] not in _EMAIL_DOMAIN_BLACKLIST}
+                     if e.split('@')[-1] not in _EMAIL_DOMAIN_BLACKLIST
+                     and not e.startswith('noreply')
+                     and not e.startswith('no-reply')}
 
     phone,   p_conf = _best_score(phone_count,   phone_sources)
     email,   e_conf = _best_score(email_count,   email_sources)
@@ -163,11 +178,13 @@ def compute_conformity(results):
         "all_phones":   sorted(phone_count.keys()),
         "all_emails":   sorted(email_count.keys()),
         "sources_hit":  list(dict.fromkeys(sources_with_data)),
-        "found":        bool(phone or email or president or members),
-        "president":    president,
-        "members":      members,
-        "address":      address,
-        "rne_id_found": rne_id_found,
+        "found":         bool(phone or email or president or members),
+        "president":     president,
+        "members":       members,
+        "address":       address,
+        "rne_id_found":  rne_id_found,
+        "date_creation": date_creation,
+        "city_rne":      city_rne,
     }
 
 

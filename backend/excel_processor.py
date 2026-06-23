@@ -19,6 +19,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from openpyxl.styles import PatternFill, Font, Alignment
 from scraper_engine import scrape_all, scrape_rne_only
 from scoring_engine import compute_conformity
+from db import save as db_save
 
 logger = logging.getLogger("excel_processor")
 
@@ -29,10 +30,10 @@ COLOR_NOTFOUND= "FFF8E1"   # orange très clair
 COLOR_ERROR   = "FFEBEE"   # rouge très clair
 COLOR_SKIP    = "F5F5F5"   # gris clair
 
-PARALLEL_WORKERS     = 3      # workers full scraping
-PARALLEL_WORKERS_RNE = 6      # workers mode rapide RNE (endpoints légers)
+PARALLEL_WORKERS     = 10     # workers full scraping (Phase 1+1.5+2)
+PARALLEL_WORKERS_RNE = 10     # idem — on utilise scrape_all pour tous
 SAVE_EVERY       = 10         # sauvegarde intermédiaire toutes les N lignes
-SLEEP_BETWEEN    = 0.5        # secondes entre chaque ligne (politesse serveurs)
+SLEEP_BETWEEN    = 0.2        # secondes entre chaque ligne
 
 
 def _style_header(cell):
@@ -59,9 +60,10 @@ def enrich_excel(file_obj, progress_callback=None, context=""):
     # ── Cartographie des entêtes ──────────────────────────────────────────────
     headers    = {}
     header_row = 1
-    for ri in range(1, 6):
+    for ri in range(1, 11):
         row_vals = [str(ws.cell(ri, c).value or "").strip() for c in range(1, ws.max_column + 1)]
-        if any(v for v in row_vals):
+        non_empty = [v for v in row_vals if v]
+        if len(non_empty) >= 2:
             for ci, v in enumerate(row_vals, 1):
                 if v:
                     headers[v] = ci
@@ -158,25 +160,9 @@ def enrich_excel(file_obj, progress_callback=None, context=""):
         t0     = time.time()
 
         try:
-            if rne_fast and rne_id:
-                # Mode rapide : RNE seul en premier (~3-6s)
-                raw  = scrape_rne_only(rne_id, name, city)
-                data = compute_conformity(raw)
-
-                # Si RNE ne donne rien d'utile, fallback vers scrape_all complet
-                if not data.get("phone") and not data.get("email"):
-                    logger.info(f"[RNE fast] Rien trouvé via RNE → fallback full scraping pour {name}")
-                    raw  = scrape_all(name, city, rne_id=rne_id, context=ctx)
-                    data = compute_conformity(raw)
-            else:
-                raw  = scrape_all(name, city, rne_id=rne_id, context=ctx)
-                data = compute_conformity(raw)
-
-            # Si toujours rien et contexte actif : retry sans contexte
-            if not data.get("found") and not data.get("president") and ctx:
-                logger.info(f"[Retry] {name} ({city}) — retry sans contexte")
-                raw  = scrape_all(name, city, rne_id=rne_id, context="")
-                data = compute_conformity(raw)
+            # Pipeline complet Phase 1+1.5+2 : toutes sources + recherche membres RNE
+            raw  = scrape_all(name, city, rne_id=rne_id, context="syndic")
+            data = compute_conformity(raw)
 
             dur = round(time.time() - t0, 1)
             return {"row": row_num, "name": name, "city": city, "data": data, "dur": dur, "ok": True}
@@ -211,6 +197,13 @@ def enrich_excel(file_obj, progress_callback=None, context=""):
 
         if found:
             logger.info(f"[Excel] ✅ {res['name']} ({res['city']}) — tél: {data.get('phone','')} email: {data.get('email','')}")
+            # Sauvegarder en DB pour que les emails soient disponibles dans le pipeline
+            try:
+                data["name"] = res["name"]
+                data["city"] = res["city"]
+                db_save(data)
+            except Exception as db_err:
+                logger.warning(f"[Excel] Erreur DB save {res['name']}: {db_err}")
         else:
             logger.info(f"[Excel] ❌ {res['name']} ({res['city']}) — rien trouvé")
 
@@ -259,8 +252,12 @@ def enrich_excel(file_obj, progress_callback=None, context=""):
 
     # ── Ajustement largeur colonnes ───────────────────────────────────────────
     for col in ws.columns:
-        max_len = max((len(str(cell.value or "")) for cell in col), default=0)
-        ws.column_dimensions[col[0].column_letter].width = min(max_len + 2, 45)
+        try:
+            col_letter = col[0].column_letter
+            max_len = max((len(str(cell.value or "")) for cell in col if hasattr(cell, 'value')), default=0)
+            ws.column_dimensions[col_letter].width = min(max_len + 2, 45)
+        except (AttributeError, TypeError):
+            continue
 
     # ── Figer la première ligne ───────────────────────────────────────────────
     ws.freeze_panes = ws.cell(header_row + 1, 1)

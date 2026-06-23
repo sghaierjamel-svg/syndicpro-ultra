@@ -3,17 +3,42 @@ SyndicPro Scanner — API Backend v4
 Nouveautés : enrichissement Excel asynchrone, cache, context générique.
 """
 
+import pathlib, re as _re
+
+def _load_env_local():
+    """Charge backend/.env.local dans os.environ si le fichier existe."""
+    env_path = pathlib.Path(__file__).parent / ".env.local"
+    if not env_path.exists():
+        return
+    with open(env_path) as f:
+        for line in f:
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            m = _re.match(r'^([A-Z_][A-Z0-9_]*)=(.*)$', line)
+            if m:
+                key, val = m.group(1), m.group(2).strip().strip('"').strip("'")
+                if key not in os.environ:  # ne pas écraser les vraies variables d'env
+                    os.environ[key] = val
+
+import os  # os doit être importé avant l'appel
+_load_env_local()
+
 from flask import Flask, request, jsonify, send_file
 from flask_cors import CORS
 from scraper_engine import scrape_all, get_rne_candidates, src_truecaller_query, _ar_to_latin, _is_arabic
 from scoring_engine import compute_conformity
 from db import (init_db, save, get_all, count_all, get_stats, delete_all,
                 seed_from_list, set_cache, job_create, job_update, job_get,
-                get_result, update_result, invalidate_cache, get_email_contacts)
+                get_result, update_result, invalidate_cache, get_email_contacts,
+                get_pipeline_stats, update_pipeline_status, get_contacts_by_status,
+                start_sequences, get_due_seq_emails, pause_sequence, record_tracking_event,
+                get_meta, set_meta, get_conn)
 from excel_processor import enrich_excel
 from email_agent import (TEMPLATES, build_email, send_email,
-                         start_campaign, get_campaign_status)
-import os
+                         start_campaign, get_campaign_status,
+                         build_seq_email, send_sequence_step, start_seq_worker,
+                         BASE_URL)
 import io
 import csv
 import base64
@@ -28,6 +53,50 @@ CORS(app)
 logging.basicConfig(level=logging.INFO)
 
 init_db()
+start_seq_worker()
+
+
+def _do_track_sync():
+    """Une passe de synchronisation tracking (appelable seule ou en boucle)."""
+    import requests
+    api_url = "https://www.syndicpro.tn/api/st/events"
+    api_key = os.environ.get("SCANNER_API_KEY", "")
+    since  = get_meta("track_sync_since")
+    params = {"since": since} if since else {}
+    resp = requests.get(
+        api_url, params=params,
+        headers={"X-Scanner-Key": api_key},
+        timeout=10
+    )
+    if resp.ok:
+        events = resp.json().get("events", [])
+        new_since = since
+        for ev in events:
+            record_tracking_event(ev["track_id"], ev["event"])
+            new_since = ev["created_at"]
+        if new_since != since:
+            set_meta("track_sync_since", new_since)
+            logging.info(f"[TrackSync] {len(events)} événements synchronisés")
+
+
+def _sync_tracking_from_syndicpro():
+    """Poller toutes les 5 min — premier tick immédiat au démarrage."""
+    import time as _time
+    # Premier sync immédiat (sans attendre 5 min)
+    try:
+        _do_track_sync()
+    except Exception as e:
+        logging.warning(f"[TrackSync] Erreur init : {e}")
+    while True:
+        _time.sleep(300)
+        try:
+            _do_track_sync()
+        except Exception as e:
+            logging.warning(f"[TrackSync] Erreur : {e}")
+
+
+_sync_thread = threading.Thread(target=_sync_tracking_from_syndicpro, daemon=True)
+_sync_thread.start()
 
 API_KEY = os.environ.get("API_KEY", "")
 
@@ -110,6 +179,83 @@ def cache_invalidate():
 def stats():
     try:
         return jsonify(get_stats())
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/dashboard/stats")
+def dashboard_stats():
+    """Stats analytiques complètes pour le command center."""
+    try:
+        conn = get_conn()
+
+        # Pipeline
+        ps = get_pipeline_stats()
+
+        # Distribution villes (top 12)
+        cities_raw = conn.execute(
+            """SELECT city, COUNT(*) as n FROM results
+               WHERE city IS NOT NULL AND city != ''
+               GROUP BY city ORDER BY n DESC LIMIT 12"""
+        ).fetchall()
+        cities = [{"city": r["city"], "n": r["n"]} for r in cities_raw]
+
+        # Distribution scores
+        sc = conn.execute("""
+            SELECT
+              SUM(CASE WHEN lead_score = 0              THEN 1 ELSE 0 END) as s0,
+              SUM(CASE WHEN lead_score BETWEEN 1 AND 30 THEN 1 ELSE 0 END) as s30,
+              SUM(CASE WHEN lead_score BETWEEN 31 AND 60 THEN 1 ELSE 0 END) as s60,
+              SUM(CASE WHEN lead_score > 60             THEN 1 ELSE 0 END) as s100
+            FROM results
+        """).fetchone()
+        scores = {"0": sc["s0"], "1-30": sc["s30"], "31-60": sc["s60"], "61+": sc["s100"]}
+
+        # Nouveaux via RNE sync
+        rne_new = conn.execute(
+            "SELECT COUNT(*) as n FROM results WHERE notes LIKE '%sync RNE%'"
+        ).fetchone()["n"]
+
+        rne_new_emailed = conn.execute(
+            """SELECT COUNT(*) as n FROM results
+               WHERE notes LIKE '%sync RNE%' AND email != '' AND email IS NOT NULL"""
+        ).fetchone()["n"]
+
+        # Séquence par étape
+        seq_steps = conn.execute("""
+            SELECT seq_step, COUNT(*) as n FROM results
+            WHERE seq_started_at IS NOT NULL AND seq_started_at != ''
+            GROUP BY seq_step ORDER BY seq_step
+        """).fetchall()
+        seq_by_step = {r["seq_step"]: r["n"] for r in seq_steps}
+
+        # Ouvertures par étape (depuis seq_log)
+        opens_raw = conn.execute("""
+            SELECT sl.step, COUNT(DISTINCT sl.result_id) as n
+            FROM seq_log sl
+            WHERE sl.opened = 1
+            GROUP BY sl.step
+        """).fetchall()
+        opens_by_step = {r["step"]: r["n"] for r in opens_raw}
+
+        # Syndics récents (date_creation non vide)
+        recent = conn.execute(
+            """SELECT COUNT(*) as n FROM results
+               WHERE date_creation >= '2026-01-01'"""
+        ).fetchone()["n"]
+
+        conn.close()
+
+        return jsonify({
+            "pipeline":       ps,
+            "cities":         cities,
+            "scores":         scores,
+            "rne_new":        rne_new,
+            "rne_new_emailed": rne_new_emailed,
+            "seq_by_step":    seq_by_step,
+            "opens_by_step":  opens_by_step,
+            "recent_2026":    recent,
+        })
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
@@ -374,8 +520,9 @@ def import_seed():
 
         header_row = None
         headers    = []
-        for i, row in enumerate(ws.iter_rows(min_row=1, max_row=5, values_only=True), 1):
-            if any(str(v or '').strip() for v in row):
+        for i, row in enumerate(ws.iter_rows(min_row=1, max_row=10, values_only=True), 1):
+            non_empty = [str(v or '').strip() for v in row if str(v or '').strip()]
+            if len(non_empty) >= 2:
                 header_row = i
                 headers    = [str(v or '').strip() for v in row]
                 break
@@ -795,6 +942,184 @@ def email_contacts_list():
     return jsonify({"contacts": contacts, "count": len(contacts)})
 
 
+# ── Pipeline commercial ────────────────────────────────────────────────────────
+
+@app.route("/api/pipeline/stats")
+def pipeline_stats():
+    try:
+        return jsonify(get_pipeline_stats())
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/pipeline/contacts")
+def pipeline_contacts():
+    """Contacts groupés par statut pipeline."""
+    try:
+        status = request.args.get("status", "prospect")
+        limit  = int(request.args.get("limit", 200))
+        rows   = get_contacts_by_status(status, limit)
+        return jsonify({"contacts": rows, "count": len(rows)})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/pipeline/<int:row_id>/status", methods=["POST"])
+def pipeline_update_status(row_id):
+    if not check_key():
+        return jsonify({"error": "Clé API invalide"}), 401
+    body   = request.get_json(silent=True) or {}
+    status = (body.get("status") or "").strip()
+    valid  = {"prospect", "emailed", "opened", "interested", "demo", "client", "lost"}
+    if status not in valid:
+        return jsonify({"error": f"Statut invalide. Valeurs : {', '.join(sorted(valid))}"}), 400
+    try:
+        update_pipeline_status(row_id, status)
+        return jsonify({"ok": True, "id": row_id, "status": status})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+# ── Séquences automatiques ─────────────────────────────────────────────────────
+
+@app.route("/api/sequence/start", methods=["POST"])
+def sequence_start():
+    if not check_key():
+        return jsonify({"error": "Clé API invalide"}), 401
+    body = request.get_json(silent=True) or {}
+    ids  = body.get("ids", [])
+    if not ids or not isinstance(ids, list):
+        return jsonify({"error": "Fournir 'ids': liste d'IDs"}), 400
+    try:
+        started = start_sequences(ids)
+        return jsonify({"started": started, "total": len(ids)})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/sequence/send-due", methods=["POST"])
+def sequence_send_due():
+    """Déclenche manuellement l'envoi de tous les emails dus."""
+    if not check_key():
+        return jsonify({"error": "Clé API invalide"}), 401
+    try:
+        due  = get_due_seq_emails()
+        sent = 0
+        errs = 0
+        for c in due:
+            step = c.get("seq_step", 1)
+            ok   = send_sequence_step(step, c, BASE_URL)
+            if ok:
+                sent += 1
+            else:
+                errs += 1
+        return jsonify({"due": len(due), "sent": sent, "errors": errs})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/sequence/status")
+def sequence_status():
+    """Résumé de l'avancement des séquences."""
+    try:
+        from db import get_conn
+        conn = get_conn()
+        rows = conn.execute("""
+            SELECT seq_step, COUNT(*) as n
+            FROM results
+            WHERE seq_started_at != '' AND seq_paused = 0
+            GROUP BY seq_step
+        """).fetchall()
+        conn.close()
+        return jsonify({"steps": {r["seq_step"]: r["n"] for r in rows}})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/sequence/<int:row_id>/pause", methods=["POST"])
+def sequence_pause(row_id):
+    if not check_key():
+        return jsonify({"error": "Clé API invalide"}), 401
+    try:
+        pause_sequence(row_id)
+        return jsonify({"ok": True})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+# ── Prospects (contacts avec email, triés par score) ──────────────────────────
+
+@app.route("/api/prospects")
+def api_prospects():
+    try:
+        from db import get_conn
+        conn = get_conn()
+        rows = conn.execute("""
+            SELECT id, name, city, email, phone, president, members,
+                   address, confidence, lead_score, sources_hit,
+                   seq_step, seq_started_at, pipeline_status,
+                   email_opens, email_clicks
+            FROM results
+            WHERE email IS NOT NULL AND email != ''
+            ORDER BY lead_score DESC, confidence DESC
+        """).fetchall()
+        conn.close()
+        result = []
+        for r in rows:
+            row = dict(r)
+            try:
+                row["members"] = json.loads(row["members"]) if row["members"] else []
+            except Exception:
+                row["members"] = []
+            result.append(row)
+        return jsonify({"prospects": result, "count": len(result)})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+# ── Lead scoring ───────────────────────────────────────────────────────────────
+
+@app.route("/api/leads/score-all", methods=["POST"])
+def leads_score_all():
+    try:
+        from lead_scorer import run_scoring_all
+        result = run_scoring_all()
+        return jsonify(result)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+# ── Tracking pixel (open + click) ──────────────────────────────────────────────
+
+_TRANSPARENT_GIF = base64.b64decode(
+    "R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7"
+)
+
+
+@app.route("/track/open/<track_id>")
+def track_open(track_id):
+    try:
+        record_tracking_event(track_id, "open")
+    except Exception:
+        pass
+    return send_file(
+        io.BytesIO(_TRANSPARENT_GIF),
+        mimetype="image/gif",
+        max_age=0,
+    )
+
+
+@app.route("/track/click/<track_id>")
+def track_click(track_id):
+    redirect_url = request.args.get("url", "https://www.syndicpro.tn")
+    try:
+        record_tracking_event(track_id, "click")
+    except Exception:
+        pass
+    from flask import redirect as flask_redirect
+    return flask_redirect(redirect_url)
+
+
 # ── Pages frontend ─────────────────────────────────────────────────────────────
 
 @app.route("/")
@@ -802,9 +1127,341 @@ def index():
     return app.send_static_file("index.html")
 
 
+# ── RNE Sync + Enrichissement automatique ─────────────────────────────────────
+
+_rne_sync_state = {
+    "phase":        "idle",   # idle | sync | enrich | done | error
+    "sync_done":    False,
+    "sync_result":  None,
+    "enrich_total": 0,
+    "enrich_done":  0,
+    "enrich_emails": 0,
+    "enrich_phones": 0,
+    "current_name": "",
+    "error":        "",
+}
+_rne_sync_lock = threading.Lock()
+
+
+def _rne_full_pipeline():
+    """Phase 1 : sync RNE → Phase 2 : enrichissement automatique des nouveaux."""
+    log = logging.getLogger("app")
+
+    # ── Phase 1 : Détection ───────────────────────────────────────────────────
+    with _rne_sync_lock:
+        _rne_sync_state["phase"] = "sync"
+
+    try:
+        from rne_sync import run_sync
+        sync_result = run_sync()
+    except Exception as e:
+        log.error(f"[RNE Sync] {e}")
+        with _rne_sync_lock:
+            _rne_sync_state.update({"phase": "error", "error": str(e)})
+        return
+
+    with _rne_sync_lock:
+        _rne_sync_state["sync_done"]   = True
+        _rne_sync_state["sync_result"] = sync_result
+
+    new_count = sync_result.get("new", 0)
+    upd_count = sync_result.get("updated", 0)
+    log.info(f"[RNE Sync] Phase 1 terminée — {new_count} nouveaux, {upd_count} mis à jour")
+
+    # ── Phase 2 : Enrichissement (nouveaux + flaggés à re-enrichir) ───────────
+    conn = get_conn()
+    todo = conn.execute(
+        """SELECT id, name, city, rne_id FROM results
+           WHERE rne_id IS NOT NULL AND rne_id != ''
+             AND (email IS NULL OR email = '')
+           ORDER BY id DESC"""
+    ).fetchall()
+    conn.close()
+    todo = [dict(r) for r in todo]
+
+    if not todo:
+        with _rne_sync_lock:
+            _rne_sync_state["phase"] = "done"
+        return
+
+    with _rne_sync_lock:
+        _rne_sync_state.update({"phase": "enrich", "enrich_total": len(todo),
+                                  "enrich_done": 0, "enrich_emails": 0, "enrich_phones": 0})
+
+    for i, row in enumerate(todo):
+        with _rne_sync_lock:
+            _rne_sync_state["current_name"] = row["name"][:50]
+
+        try:
+            invalidate_cache(row["name"], row["city"])
+            raw    = scrape_all(row["name"], row["city"], rne_id=row["rne_id"], context="")
+            result = compute_conformity(raw)
+            result["name"] = row["name"]
+            result["city"] = row["city"]
+            save(result)
+            got_email = bool(result.get("email"))
+            got_phone = bool(result.get("phone"))
+            with _rne_sync_lock:
+                _rne_sync_state["enrich_done"]  = i + 1
+                if got_email: _rne_sync_state["enrich_emails"] += 1
+                if got_phone: _rne_sync_state["enrich_phones"] += 1
+        except Exception as e:
+            log.warning(f"[Enrich] {row['name'][:40]}: {e}")
+            with _rne_sync_lock:
+                _rne_sync_state["enrich_done"] = i + 1
+
+        import time as _time
+        _time.sleep(1.5)
+
+    with _rne_sync_lock:
+        _rne_sync_state["phase"] = "done"
+
+    log.info(f"[RNE Sync] Pipeline terminé — "
+             f"{_rne_sync_state['enrich_emails']} emails, "
+             f"{_rne_sync_state['enrich_phones']} tél")
+
+
+@app.route("/api/rne/sync", methods=["POST"])
+def rne_sync_start():
+    with _rne_sync_lock:
+        if _rne_sync_state["phase"] in ("sync", "enrich"):
+            return jsonify({"ok": False, "error": "Pipeline déjà en cours"})
+        _rne_sync_state.update({
+            "phase": "idle", "sync_done": False, "sync_result": None,
+            "enrich_total": 0, "enrich_done": 0, "enrich_emails": 0,
+            "enrich_phones": 0, "current_name": "", "error": "",
+        })
+
+    threading.Thread(target=_rne_full_pipeline, daemon=True).start()
+    return jsonify({"ok": True})
+
+
+@app.route("/api/rne/sync/status")
+def rne_sync_status():
+    with _rne_sync_lock:
+        return jsonify(dict(_rne_sync_state))
+
+
+@app.route("/api/nouveautes")
+def api_nouveautes():
+    """Rapport des nouveautés : nouveaux RNE, multi-gestionnaires, MAJ détectées."""
+    conn = get_conn()
+
+    # 1. Nouveaux syndics RNE (détectés via sync)
+    new_rows = conn.execute("""
+        SELECT id, name, city, email, phone, lead_score, rne_sync_at, date_creation,
+               seq_started_at, seq_step, pipeline_status
+        FROM results
+        WHERE notes LIKE '%sync RNE%'
+        ORDER BY rne_sync_at DESC
+    """).fetchall()
+    new_syndics = [dict(r) for r in new_rows]
+
+    # 2. Multi-gestionnaires (même email → plusieurs résidences)
+    multi_rows = conn.execute("""
+        SELECT email, COUNT(*) as n,
+               GROUP_CONCAT(id, '||') as ids,
+               GROUP_CONCAT(name, '||') as noms,
+               GROUP_CONCAT(city, '||') as villes,
+               GROUP_CONCAT(lead_score, '||') as scores
+        FROM results
+        WHERE email IS NOT NULL AND email != '' AND email NOT LIKE '%xxx%'
+        GROUP BY email
+        HAVING n > 1
+        ORDER BY n DESC
+        LIMIT 30
+    """).fetchall()
+
+    multi = []
+    for r in multi_rows:
+        ids    = (r["ids"]    or "").split("||")
+        noms   = (r["noms"]   or "").split("||")
+        villes = (r["villes"] or "").split("||")
+        scores = (r["scores"] or "").split("||")
+        residences = [
+            {"id": ids[i], "name": noms[i], "city": villes[i],
+             "score": int(scores[i]) if scores[i].isdigit() else 0}
+            for i in range(len(ids))
+        ]
+        multi.append({
+            "email":       r["email"],
+            "count":       r["n"],
+            "residences":  residences,
+            "total_score": sum(x["score"] for x in residences),
+        })
+
+    # 3. Syndics flaggés mise à jour RNE
+    updated_rows = conn.execute("""
+        SELECT id, name, city, email, phone, rne_sync_at
+        FROM results
+        WHERE notes LIKE '%Mise à jour RNE%'
+        ORDER BY rne_sync_at DESC
+    """).fetchall()
+    updated = [dict(r) for r in updated_rows]
+
+    # 4. Résumé chiffres clés
+    stats_new = {
+        "total":      len(new_syndics),
+        "with_email": sum(1 for r in new_syndics if r.get("email")),
+        "no_email":   sum(1 for r in new_syndics if not r.get("email")),
+        "seq_started":sum(1 for r in new_syndics if r.get("seq_started_at")),
+    }
+    last_sync = new_rows[0]["rne_sync_at"][:16] if new_rows else "—"
+
+    conn.close()
+    return jsonify({
+        "new_syndics":  new_syndics,
+        "multi":        multi,
+        "updated":      updated,
+        "stats_new":    stats_new,
+        "last_sync":    last_sync,
+    })
+
+
+@app.route("/nouveautes")
+def nouveautes_page():
+    return app.send_static_file("nouveautes.html")
+
+
+@app.route("/api/seq/start-new-rne", methods=["POST"])
+def seq_start_new_rne():
+    """Lance la séquence uniquement pour les syndics détectés via sync RNE
+    qui ont un email et n'ont pas encore démarré de séquence."""
+    conn = get_conn()
+    rows = conn.execute(
+        """SELECT id FROM results
+           WHERE notes LIKE '%sync RNE%'
+             AND email IS NOT NULL AND email != ''
+             AND (seq_started_at IS NULL OR seq_started_at = '')
+             AND seq_paused = 0"""
+    ).fetchall()
+    conn.close()
+    ids = [r["id"] for r in rows]
+    if not ids:
+        return jsonify({"ok": True, "started": 0, "message": "Aucun nouveau syndic éligible"})
+    count = start_sequences(ids)
+    return jsonify({"ok": True, "started": count})
+
+
+@app.route("/api/seq/start-multi", methods=["POST"])
+def seq_start_multi():
+    """Lance une séquence multi-gestionnaire pour l'email donné.
+    Sélectionne le contact principal (le plus récent), consolide les noms
+    des résidences, et marque les autres comme gérés via multi-seq."""
+    data  = request.get_json(silent=True) or {}
+    email = (data.get("email") or "").strip().lower()
+    if not email:
+        return jsonify({"error": "email requis"}), 400
+
+    conn = get_conn()
+    rows = conn.execute(
+        """SELECT id, name, city, president FROM results
+           WHERE LOWER(email) = ? ORDER BY id DESC""",
+        (email,)
+    ).fetchall()
+
+    if not rows:
+        conn.close()
+        return jsonify({"error": "Aucun contact trouvé pour cet email"}), 404
+
+    count        = len(rows)
+    main         = rows[0]
+    others       = rows[1:]
+    residences   = ", ".join(r["name"] for r in rows[:8])
+    per_res      = round(99 / max(count, 1))
+
+    # Mise à jour du contact principal
+    conn.execute(
+        """UPDATE results
+           SET is_multi=1, multi_count=?, residences_str=?,
+               seq_paused=0
+           WHERE id=?""",
+        (count, residences, main["id"])
+    )
+    # Marquer les autres résidences comme gérées via multi-seq (ne pas ré-envoyer)
+    for r in others:
+        conn.execute(
+            """UPDATE results
+               SET is_multi=1, multi_count=?, residences_str=?,
+                   seq_paused=1,
+                   notes=CASE WHEN notes NOT LIKE '%multi-seq%'
+                               THEN notes || ' [géré via multi-seq]'
+                               ELSE notes END
+               WHERE id=?""",
+            (count, residences, r["id"])
+        )
+    conn.commit()
+    conn.close()
+
+    started = start_sequences([main["id"]])
+    return jsonify({
+        "ok": True,
+        "started": started,
+        "main_id": main["id"],
+        "count": count,
+        "residences": residences,
+    })
+
+
+@app.route("/api/seq/new-rne/count")
+def seq_new_rne_count():
+    """Retourne le nombre de nouveaux syndics RNE éligibles à la séquence."""
+    conn = get_conn()
+    row = conn.execute(
+        """SELECT COUNT(*) as n FROM results
+           WHERE notes LIKE '%sync RNE%'
+             AND email IS NOT NULL AND email != ''
+             AND (seq_started_at IS NULL OR seq_started_at = '')
+             AND seq_paused = 0"""
+    ).fetchone()
+    conn.close()
+    return jsonify({"count": row["n"]})
+
+
 @app.route("/dashboard")
 def dashboard_page():
     return app.send_static_file("dashboard.html")
+
+
+@app.route("/pipeline")
+def pipeline_page():
+    return app.send_static_file("pipeline.html")
+
+
+@app.route("/prospects")
+def prospects_page():
+    return app.send_static_file("prospects.html")
+
+
+@app.route("/api/email/test", methods=["POST"])
+def email_test():
+    """Envoie tous les templates (std + multi) à l'adresse demandée."""
+    data = request.get_json(silent=True) or {}
+    to   = (data.get("to") or "").strip()
+    if not to:
+        return jsonify({"error": "to requis"}), 400
+
+    import uuid
+    from email_agent import build_seq_email, send_email, SEQ_TEMPLATES, SEQ_MULTI_TEMPLATES
+
+    contact_std = {"name": "Résidence El Marwa", "city": "Tunis", "president": "", "id": 0}
+    contact_multi = {"name": "Résidence El Marwa", "city": "Tunis", "president": "",
+                     "id": 0, "is_multi": 1, "multi_count": 5,
+                     "residences_str": "El Marwa, La Colline, Jasmin, Safsaf, El Amal"}
+
+    results = []
+    for step in [1, 2, 3, 4]:
+        subj, html = build_seq_email(step, contact_std, str(uuid.uuid4()), request.host_url)
+        ok = send_email(to, f"[TEST std étape {step}] {subj}", html)
+        results.append({"type": "std", "step": step, "subject": subj, "sent": ok})
+
+    for step in [1, 2, 3, 4]:
+        subj, html = build_seq_email(step, contact_multi, str(uuid.uuid4()), request.host_url)
+        ok = send_email(to, f"[TEST multi étape {step}] {subj}", html)
+        results.append({"type": "multi", "step": step, "subject": subj, "sent": ok})
+
+    sent_count = sum(1 for r in results if r["sent"])
+    return jsonify({"ok": True, "sent": sent_count, "total": len(results), "results": results})
 
 
 if __name__ == "__main__":
